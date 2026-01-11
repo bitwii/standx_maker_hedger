@@ -1,0 +1,91 @@
+{
+  "_comment": "StandX Maker Hedger Configuration - 做市对冲系统配置",
+
+  "trading": {
+    "_comment": "交易参数配置",
+    "symbol": "BTC-USD",
+    "_symbol_comment": "交易对，格式: BTC-USD, ETH-USD 等",
+
+    "spread_percentage": 0.1,
+    "_spread_comment": "挂单价差百分比，0.1 = 10%（在当前价格±10%挂单）",
+
+    "order_size": "0.001",
+    "_order_size_comment": "单笔订单大小（BTC数量）",
+
+    "leverage": 4,
+    "_leverage_comment": "杠杆倍数",
+
+    "margin_mode": "cross",
+    "_margin_mode_comment": "保证金模式: cross(全仓) 或 isolated(逐仓)",
+
+    "check_interval_seconds": 5,
+    "_check_interval_comment": "价格检查间隔（秒）"
+  },
+
+  "exchanges": {
+    "_comment": "交易所配置",
+
+    "standx": {
+      "_comment": "StandX 交易所配置",
+      "auth_url": "https://api.standx.com",
+      "_auth_url_comment": "StandX 认证API地址",
+
+      "trade_url": "https://perps.standx.com",
+      "_trade_url_comment": "StandX 交易API地址",
+
+      "chain": "solana",
+      "_chain_comment": "区块链类型: solana"
+    },
+
+    "lighter": {
+      "_comment": "Lighter 交易所配置",
+      "enabled": true,
+      "_enabled_comment": "是否启用 Lighter 对冲"
+    }
+  },
+
+  "risk_management": {
+    "_comment": "风险管理参数",
+
+    "max_position_size": 1000.0,
+    "_max_position_size_comment": "最大持仓金额（USD）",
+
+    "max_daily_loss": 50.0,
+    "_max_daily_loss_comment": "每日最大亏损限额（USD）",
+
+    "min_profit_threshold": 5.0,
+    "_min_profit_threshold_comment": "最小利润阈值（USD）",
+
+    "emergency_stop_loss": 500.0,
+    "_emergency_stop_loss_comment": "紧急止损线（USD），触发后立即停止交易",
+
+    "max_open_orders": 10,
+    "_max_open_orders_comment": "最大同时挂单数量"
+  },
+
+  "strategy": {
+    "_comment": "策略参数配置",
+
+    "hedge_immediately": true,
+    "_hedge_immediately_comment": "订单成交后是否立即对冲（true=立即, false=延迟）",
+
+    "cancel_distance_percentage": 0.02,
+    "_cancel_distance_comment": "撤单距离百分比，0.05 = 5%（价格变动超过5%时撤单重挂）",
+
+    "close_position_on_shutdown": false,
+    "_close_position_comment": "关闭程序时是否自动平仓"
+  },
+
+  "logging": {
+    "_comment": "日志配置",
+
+    "level": "DEBUG",
+    "_level_comment": "日志级别: DEBUG, INFO, WARNING, ERROR",
+
+    "file": "logs/standx_maker_hedger.log",
+    "_file_comment": "日志文件路径",
+
+    "status_interval_seconds": 60,
+    "_status_interval_comment": "状态输出间隔（秒）"
+  }
+}

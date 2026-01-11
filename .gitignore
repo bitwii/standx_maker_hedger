@@ -1,0 +1,28 @@
+# .env file - DO NOT COMMIT TO GIT
+.env
+
+# Virtual environment
+venv/
+env/
+*.pyc
+__pycache__/
+
+# Logs
+logs/
+*.log
+CHANGELOG.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup

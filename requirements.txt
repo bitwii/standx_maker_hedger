@@ -1,0 +1,15 @@
+# Core dependencies
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Solana and crypto
+base58>=2.1.1
+solders>=0.18.0
+cryptography>=41.0.0
+
+# WebSocket support
+websockets>=12.0
+
+# Lighter SDK (from GitHub)
+git+https://github.com/elliottech/lighter-python.git
+
