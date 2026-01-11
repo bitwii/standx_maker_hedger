@@ -352,7 +352,7 @@ A: StandX WebSocket 管理器包含自动重连机制，断线后会在 5 秒后
 - REST API 调用会重试
 - 如果持续失败，机器人会记录错误并继续尝试
 
-## 扩展功能建议
+## 后续版本计划
 
 可以考虑添加：
 
@@ -360,14 +360,18 @@ A: StandX WebSocket 管理器包含自动重连机制，断线后会在 5 秒后
 - [ ] 多层挂单策略
 - [ ] 性能指标统计 (Sharpe ratio 等)
 - [ ] 数据库存储历史交易
-- [ ] Web 控制面板
 - [ ] 多交易对支持
 
 ## 技术支持
 
 - **StandX API 文档**: https://docs.standx.com
 - **Lighter SDK**: https://github.com/elliottech/lighter-python
+
 - **问题反馈**: 检查日志文件或联系开发者
+
+## 鸣谢，以下大佬的项目给了启发和帮助
+https://github.com/your-quantguy
+https://github.com/Dazmon88
 
 ---
 
