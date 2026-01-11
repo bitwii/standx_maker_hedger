@@ -1,8 +1,12 @@
 # StandX Maker Hedger - 做市对冲系统
-
 ## 概述
 
 这是一个自动化做市+对冲系统，在 StandX 上做市，并在 Lighter 上对冲风险。
+
+## 邀请链接，没有注册StandX的可以使用这个链接来注册新账户
+
+#### StandX： [https://standx.com/referral?code=JAAWW] https://standx.com/referral?code=JAAWW
+
 
 ### 核心策略
 
