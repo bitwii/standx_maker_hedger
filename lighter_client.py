@@ -310,17 +310,18 @@ class LighterHedger:
         """Fetch positions from Lighter API"""
         try:
             account_api = lighter.AccountApi(self.api_client)
-            auth_token, err = self.lighter_client.create_auth_token_with_expiry()
 
-            if err is not None:
-                raise Exception(f"Auth token error: {err}")
-
-            positions_response = await account_api.user_positions(
-                account_index=self.account_index,
-                authorization=auth_token
+            # Get account info which includes positions
+            account_data = await account_api.account(
+                by="index",
+                value=str(self.account_index)
             )
 
-            return positions_response.positions if positions_response else []
+            if not account_data or not account_data.accounts:
+                logger.warning("No account data or positions found")
+                return []
+
+            return account_data.accounts[0].positions
 
         except Exception as e:
             logger.error(f"Error fetching positions: {e}")
@@ -408,19 +409,25 @@ class LighterHedger:
 
         try:
             account_api = lighter.AccountApi(self.api_client)
-            auth_token, err = self.lighter_client.create_auth_token_with_expiry()
 
-            if err is not None:
-                raise Exception(f"Auth token error: {err}")
-
-            balance_response = await account_api.user_balances(
-                account_index=self.account_index,
-                authorization=auth_token
+            # Get account info which includes balance
+            account_data = await account_api.account(
+                by="index",
+                value=str(self.account_index)
             )
 
-            if balance_response and balance_response.balances:
-                # Usually USDC balance
-                balance = Decimal(str(balance_response.balances[0].free))
+            if account_data and account_data.accounts:
+                account = account_data.accounts[0]
+                # Get USDC balance (usually the first balance)
+                if hasattr(account, 'available_balance'):
+                    balance = Decimal(str(account.available_balance))
+                elif hasattr(account, 'balance'):
+                    balance = Decimal(str(account.balance))
+                else:
+                    # Try to get from balances array if exists
+                    balance = Decimal('0')
+                    logger.warning("Could not find balance field in account data")
+
                 return {
                     "balance": balance,
                     "available": balance
