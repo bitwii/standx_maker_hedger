@@ -127,8 +127,6 @@ class StandXMakerHedger:
             bid_price = float(int(mark_price - spread_amount))
             ask_price = float(int(mark_price + spread_amount))
 
-            logger.info(f"Placing orders: Bid @ {bid_price}, Ask @ {ask_price}")
-
             # Check if we can place orders
             if not self.risk_mgr.can_place_order(len(self.standx.active_orders)):
                 logger.warning("Max orders limit reached")
@@ -137,12 +135,14 @@ class StandXMakerHedger:
             # Place bid order
             bid_order = await self.standx.place_order("buy", bid_price, float(self.order_size))
             if bid_order:
-                logger.info(f"Bid order placed: {bid_order.order_id}")
+                symbol = self.standx.symbol.split('-')[0]  # e.g., "BTC"
+                logger.info(f"✓ Bid placed: {symbol} @ ${bid_price:,.2f}")
 
             # Place ask order
             ask_order = await self.standx.place_order("sell", ask_price, float(self.order_size))
             if ask_order:
-                logger.info(f"Ask order placed: {ask_order.order_id}")
+                symbol = self.standx.symbol.split('-')[0]  # e.g., "BTC"
+                logger.info(f"✓ Ask placed: {symbol} @ ${ask_price:,.2f}")
 
         except Exception as e:
             logger.error(f"Error placing orders: {e}", exc_info=True)
@@ -164,18 +164,17 @@ class StandXMakerHedger:
 
             # Check if any order is too close to current price
             needs_update = False
-            for order_id, order_info in self.standx.active_orders.items():
+            for _, order_info in self.standx.active_orders.items():
                 price_diff_pct = abs(Decimal(str(order_info.price)) - mark_price) / mark_price
 
                 if price_diff_pct < Decimal(str(self.cancel_threshold)):
-                    logger.info(f"Order {order_id} at {order_info.price} too close to market {mark_price}")
+                    side = "Bid" if order_info.side == "buy" else "Ask"
+                    logger.info(f"{side} ${order_info.price:,.2f} too close to ${mark_price:,.2f}")
                     needs_update = True
                     break
 
             # If orders need updating, cancel all and replace
             if needs_update or len(self.standx.active_orders) == 0:
-                logger.info("Cancelling and replacing orders...")
-
                 # Cancel all orders
                 if len(self.standx.active_orders) > 0:
                     await self.standx.cancel_orders()
@@ -379,22 +378,25 @@ def setup_logging(config):
 
     # Custom formatter with milliseconds
     class MillisecondFormatter(logging.Formatter):
-        """Custom formatter that shows milliseconds (2 digits)"""
+        """Custom formatter that shows milliseconds (2 digits) in UTC+8 timezone"""
         def formatTime(self, record, datefmt=None):
-            from datetime import datetime
-            ct = datetime.fromtimestamp(record.created)
+            from datetime import datetime, timezone, timedelta
+            # Convert to UTC+8 (Asia/Shanghai timezone)
+            utc_time = datetime.fromtimestamp(record.created, tz=timezone.utc)
+            beijing_time = utc_time + timedelta(hours=8)
+
             # Format: YYMMDD HH:MM:SS.ms (e.g., 260112 10:15:46.78)
-            date_part = ct.strftime("%y%m%d")
-            time_part = ct.strftime("%H:%M:%S")
+            date_part = beijing_time.strftime("%y%m%d")
+            time_part = beijing_time.strftime("%H:%M:%S")
             # Add 2-digit milliseconds
             ms = int(record.msecs / 10)  # Convert to centiseconds (2 digits)
             return f"{date_part} {time_part}.{ms:02d}"
 
     # Configure logging with optimized format
     # Format: [YYMMDD HH:MM:SS.ms] LEVEL [File:Line] Message
-    # Example: [260112 12:34:56.78] INFO [main.py:123] Bot started
+    # Example: [260112 12:34:56.78]INFO[main.py:123] Bot started
     formatter = MillisecondFormatter(
-        '[%(asctime)s] %(levelname)s [%(filename)s:%(lineno)d] %(message)s'
+        '[%(asctime)s]%(levelname)s[%(filename)s:%(lineno)d] %(message)s'
     )
 
     # File handler
