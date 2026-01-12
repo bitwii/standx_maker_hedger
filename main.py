@@ -48,6 +48,16 @@ class StandXMakerHedger:
         self.running = False
         self.current_price = None
 
+        # Status tracking for smart logging
+        self.last_status = {
+            'standx_pos': 0,
+            'lighter_pos': 0,
+            'order_count': 0,
+            'trade_count': 0,
+            'pnl': 0.0
+        }
+        self.last_hourly_status_time = 0
+
         logger.info("StandX Maker Hedger initialized successfully")
 
     async def handle_standx_order_fill(self, order_data: dict):
@@ -220,8 +230,6 @@ class StandXMakerHedger:
             # Place initial orders
             await self.place_market_making_orders()
 
-            last_status_print = 0
-
             while self.running:
                 # Check emergency stop
                 if self.risk_mgr.emergency_stop:
@@ -231,11 +239,8 @@ class StandXMakerHedger:
                 # Check and update orders
                 await self.check_and_update_orders()
 
-                # Print status periodically
-                current_time = asyncio.get_event_loop().time()
-                if current_time - last_status_print > 60:  # Every 60 seconds
-                    await self.print_status()
-                    last_status_print = current_time
+                # Print status only if needed (changes or hourly)
+                await self.print_status_if_needed()
 
                 # Sleep before next iteration
                 await asyncio.sleep(self.check_interval)
@@ -247,8 +252,68 @@ class StandXMakerHedger:
         finally:
             await self.shutdown()
 
+    async def print_status_if_needed(self):
+        """
+        Print bot status only if:
+        1. Something changed (position, orders, trades, P&L)
+        2. Or 1 hour has passed since last status print
+        """
+        try:
+            import time
+            current_time = time.time()
+
+            # Get current status
+            risk_status = self.risk_mgr.get_status()
+            standx_pos = await self.standx.get_position()
+            lighter_pos = await self.lighter.get_position()
+            order_count = len(self.standx.active_orders)
+            trade_count = risk_status['trade_count']
+            total_pnl = risk_status['total_pnl']
+
+            # Check if anything changed
+            has_changes = (
+                standx_pos != self.last_status['standx_pos'] or
+                lighter_pos != self.last_status['lighter_pos'] or
+                order_count != self.last_status['order_count'] or
+                trade_count != self.last_status['trade_count'] or
+                abs(total_pnl - self.last_status['pnl']) > 0.01
+            )
+
+            # Check if 1 hour has passed
+            hour_passed = (current_time - self.last_hourly_status_time) >= 3600
+
+            # Print if changes or hourly
+            if has_changes or hour_passed:
+                # Use compact single-line format with abbreviations
+                # SX = StandX, LT = Lighter
+                symbol = self.standx.symbol  # e.g., "BTC-USD"
+                base_symbol = symbol.split('-')[0]  # e.g., "BTC"
+                logger.info(
+                    f"Status: ${self.current_price:,.2f} | "
+                    f"Orders={order_count} | "
+                    f"Pos: SX={standx_pos:.2f}{base_symbol} LT={lighter_pos:.2f}{base_symbol} | "
+                    f"P&L=${total_pnl:.2f} | "
+                    f"Trades={trade_count}"
+                )
+
+                # Update last status
+                self.last_status = {
+                    'standx_pos': standx_pos,
+                    'lighter_pos': lighter_pos,
+                    'order_count': order_count,
+                    'trade_count': trade_count,
+                    'pnl': total_pnl
+                }
+
+                # Update hourly timer if it was hourly print
+                if hour_passed:
+                    self.last_hourly_status_time = current_time
+
+        except Exception as e:
+            logger.error(f"Error checking status: {e}")
+
     async def print_status(self):
-        """Print bot status"""
+        """Print detailed bot status (called on demand or startup)"""
         try:
             risk_status = self.risk_mgr.get_status()
             standx_pos = await self.standx.get_position()
@@ -312,18 +377,40 @@ def setup_logging(config):
     import os
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
+    # Custom formatter with milliseconds
+    class MillisecondFormatter(logging.Formatter):
+        """Custom formatter that shows milliseconds (2 digits)"""
+        def formatTime(self, record, datefmt=None):
+            from datetime import datetime
+            ct = datetime.fromtimestamp(record.created)
+            # Format: YYMMDD HH:MM:SS.ms (e.g., 260112 10:15:46.78)
+            date_part = ct.strftime("%y%m%d")
+            time_part = ct.strftime("%H:%M:%S")
+            # Add 2-digit milliseconds
+            ms = int(record.msecs / 10)  # Convert to centiseconds (2 digits)
+            return f"{date_part} {time_part}.{ms:02d}"
+
     # Configure logging with optimized format
-    # Format: [Time] [Level] [File:Line] Message
-    # Example: [12:34:56] INFO [main:123] Bot started
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format='[%(asctime)s] %(levelname)-5s [%(filename)s:%(lineno)d] %(message)s',
-        datefmt='%H:%M:%S',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout)
-        ]
+    # Format: [YYMMDD HH:MM:SS.ms] LEVEL [File:Line] Message
+    # Example: [260112 12:34:56.78] INFO [main.py:123] Bot started
+    formatter = MillisecondFormatter(
+        '[%(asctime)s] %(levelname)s [%(filename)s:%(lineno)d] %(message)s'
     )
+
+    # File handler
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(formatter)
+
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, log_level.upper()))
+    root_logger.handlers.clear()
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
 
 
 async def main_async():
