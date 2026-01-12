@@ -312,10 +312,13 @@ def setup_logging(config):
     import os
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
-    # Configure logging
+    # Configure logging with optimized format
+    # Format: [Time] [Level] [File:Line] Message
+    # Example: [12:34:56] INFO [main:123] Bot started
     logging.basicConfig(
         level=getattr(logging, log_level.upper()),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        format='[%(asctime)s] %(levelname)-5s [%(filename)s:%(lineno)d] %(message)s',
+        datefmt='%H:%M:%S',
         handlers=[
             logging.FileHandler(log_file),
             logging.StreamHandler(sys.stdout)

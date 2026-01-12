@@ -312,8 +312,6 @@ class StandXMarketMaker:
             qty = float(order_data.get("qty", 0) or order_data.get("size", 0))
             filled_qty = float(order_data.get("filled_qty", 0) or order_data.get("filled_size", 0))
 
-            logger.info(f"[WS] Order Update: {order_id} - {status} - {side} {qty}@{price}")
-
             # Update order info
             if order_id in self.active_orders:
                 order_info = self.active_orders[order_id]
@@ -321,7 +319,8 @@ class StandXMarketMaker:
 
                 # If filled, trigger callback
                 if status in ["filled", "completed"] and filled_qty > 0:
-                    logger.info(f"Order filled: {side} {filled_qty}@{price}")
+                    fill_value = filled_qty * price
+                    logger.info(f"✓ FILLED: {side.upper()} {filled_qty} {self.symbol} @ ${price:,.2f} (${fill_value:,.2f})")
                     if self._order_update_handler:
                         self._order_update_handler({
                             "order_id": order_id,
@@ -396,7 +395,8 @@ class StandXMarketMaker:
                 auth=self.auth_client  # Now using correctly initialized auth with Solana seed
             )
 
-            logger.info(f"Placed {side} order at {price}: {response}")
+            # Log order placement with trading details
+            logger.info(f"Order placed: {side.upper()} {qty} {self.symbol} @ ${price}")
 
             # Extract order ID from response
             order_id = str(response.get("request_id", cl_ord_id))

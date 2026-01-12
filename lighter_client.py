@@ -219,16 +219,17 @@ class LighterHedger:
                 'trigger_price': 0,
             }
 
-            logger.info(f"Placing Lighter hedge: {side} {quantity} @ {price}")
+            hedge_value = float(quantity) * float(price)
+            logger.info(f"→ Hedging on Lighter: {side.upper()} {quantity} {self.ticker_symbol} @ ${price:,.2f} (${hedge_value:,.2f})")
 
             # Submit order
-            create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
+            create_order, _, error = await self.lighter_client.create_order(**order_params)
 
             if error is not None:
-                logger.error(f"Lighter hedge order failed: {error}")
+                logger.error(f"✗ Hedge FAILED: {error}")
                 return False
 
-            logger.info(f"Lighter hedge order placed successfully (tx: {tx_hash})")
+            logger.info(f"✓ Hedge placed successfully")
 
             # Update position tracking
             qty_signed = quantity if side.lower() == 'buy' else -quantity
