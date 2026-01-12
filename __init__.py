@@ -9,7 +9,7 @@ __author__ = "Your Name"
 from .config_loader import get_config
 from .arbitrage_bot import ArbitrageBot
 from .standx_market_maker import StandXMarketMaker
-from .lighter_hedger import LighterHedger
+from .lighter_client import LighterHedger
 from .risk_manager import RiskManager
 
 __all__ = [

@@ -10,7 +10,7 @@ from datetime import datetime
 
 from config_loader import get_config
 from standx_market_maker import StandXMarketMaker, OrderInfo
-from lighter_hedger import LighterHedger
+from lighter_client import LighterHedger
 from risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
