@@ -347,7 +347,8 @@ class StandXMarketMaker:
             side = order_data.get("side", "")
             price = float(order_data.get("price", 0))
             qty = float(order_data.get("qty", 0) or order_data.get("size", 0))
-            filled_qty = float(order_data.get("filled_qty", 0) or order_data.get("filled_size", 0))
+            # Fix: StandX uses "fill_qty" not "filled_qty"
+            filled_qty = float(order_data.get("fill_qty", 0) or order_data.get("filled_qty", 0) or order_data.get("filled_size", 0))
 
             # Update order info
             if order_id in self.active_orders:
