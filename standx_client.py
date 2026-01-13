@@ -112,6 +112,10 @@ class StandXWebSocketManager:
         try:
             msg = json.loads(msg_str)
 
+            # 🔥 DIAGNOSTIC: Log all messages at INFO level to debug order fill issue
+            if msg.get("type") == "order" or "order" in msg_str.lower():
+                self.logger.info(f"[WS] RAW ORDER MESSAGE: {msg}")
+
             # Handle different message types
             if msg.get("type") == "order":
                 # Order update
@@ -302,8 +306,8 @@ class StandXMarketMaker:
     def _on_ws_order_update(self, order_data: dict):
         """WebSocket order update callback"""
         try:
-            # Debug: log raw order data
-            logger.debug(f"[WS] Raw order update: {order_data}")
+            # 🔥 DIAGNOSTIC: Log at INFO level to debug order fill issue
+            logger.info(f"[WS] ORDER UPDATE CALLBACK: {order_data}")
 
             order_id = order_data.get("id") or order_data.get("order_id")
             if not order_id:
@@ -316,10 +320,11 @@ class StandXMarketMaker:
             qty = float(order_data.get("qty", 0) or order_data.get("size", 0))
             filled_qty = float(order_data.get("filled_qty", 0) or order_data.get("filled_size", 0))
 
-            logger.debug(f"[WS] Parsed: id={order_id}, status={status}, side={side}, qty={qty}, filled={filled_qty}")
+            logger.info(f"[WS] PARSED: id={order_id}, status={status}, side={side}, qty={qty}, filled={filled_qty}")
 
             # Update order info
             if order_id in self.active_orders:
+                logger.info(f"[WS] Order {order_id} found in active_orders")
                 order_info = self.active_orders[order_id]
                 order_info.status = status
 
@@ -347,7 +352,7 @@ class StandXMarketMaker:
                     if order_id in self.active_orders:
                         del self.active_orders[order_id]
             else:
-                logger.debug(f"[WS] Order {order_id} not in active_orders (status={status})")
+                logger.info(f"[WS] Order {order_id} NOT in active_orders (status={status}). Active orders: {list(self.active_orders.keys())}")
 
         except Exception as e:
             logger.error(f"Error processing order update: {e}", exc_info=True)
