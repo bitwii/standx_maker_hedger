@@ -110,10 +110,6 @@ class StandXWebSocketManager:
         try:
             msg = json.loads(msg_str)
 
-            # 🔥 DIAGNOSTIC: Log all messages at INFO level to debug order fill issue
-            if msg.get("channel") == "order" or "order" in msg_str.lower():
-                self.logger.info(f"[WS] RAW ORDER MESSAGE: {msg}")
-
             # Handle authentication response
             if msg.get("channel") == "auth":
                 auth_data = msg.get("data", {})
@@ -125,14 +121,19 @@ class StandXWebSocketManager:
 
             # Handle order updates
             if msg.get("channel") == "order":
-                # Order update
                 order_data = msg.get("data", {})
                 if order_data:
+                    # Log simplified order info (not full JSON)
+                    order_id = order_data.get("id", "?")
+                    status = order_data.get("status", "?")
+                    side = order_data.get("side", "?")
+                    price = order_data.get("price", "?")
+                    self.logger.info(f"[WS] Order: id={order_id} {side} ${price} status={status}")
                     self.on_message_callback(order_data)
                 return
 
             # Other messages (ping/pong, etc.)
-            self.logger.debug(f"[WS] Received: {msg}")
+            self.logger.debug(f"[WS] Received: {str(msg)[:100]}")
 
         except Exception as e:
             self.logger.error(f"[WS] Error handling message: {e}")
@@ -334,12 +335,9 @@ class StandXMarketMaker:
     def _on_ws_order_update(self, order_data: dict):
         """WebSocket order update callback"""
         try:
-            # 🔥 DIAGNOSTIC: Log at INFO level to debug order fill issue
-            logger.info(f"[WS] ORDER UPDATE CALLBACK: {order_data}")
-
             order_id = order_data.get("id") or order_data.get("order_id")
             if not order_id:
-                logger.warning(f"[WS] Order update missing order_id: {order_data}")
+                logger.warning(f"[WS] Order update missing order_id")
                 return
 
             # Convert order_id to string for consistent comparison
@@ -351,11 +349,8 @@ class StandXMarketMaker:
             qty = float(order_data.get("qty", 0) or order_data.get("size", 0))
             filled_qty = float(order_data.get("filled_qty", 0) or order_data.get("filled_size", 0))
 
-            logger.info(f"[WS] PARSED: id={order_id}, status={status}, side={side}, qty={qty}, filled={filled_qty}")
-
             # Update order info
             if order_id in self.active_orders:
-                logger.info(f"[WS] Order {order_id} found in active_orders")
                 order_info = self.active_orders[order_id]
                 order_info.status = status
 
@@ -364,7 +359,7 @@ class StandXMarketMaker:
                     fill_value = filled_qty * price
                     logger.info(f"✓ FILLED: {side.upper()} {filled_qty} {self.symbol} @ ${price:,.2f} (${fill_value:,.2f})")
                     if self._order_update_handler:
-                        logger.info(f"Triggering hedge callback for order {order_id}")
+                        logger.info(f"Triggering hedge for order {order_id}")
                         # Schedule async callback properly
                         import asyncio
                         asyncio.create_task(self._order_update_handler({
@@ -382,8 +377,6 @@ class StandXMarketMaker:
                     # Remove from active orders
                     if order_id in self.active_orders:
                         del self.active_orders[order_id]
-            else:
-                logger.info(f"[WS] Order {order_id} NOT in active_orders (status={status}). Active orders: {list(self.active_orders.keys())}")
 
         except Exception as e:
             logger.error(f"Error processing order update: {e}", exc_info=True)
