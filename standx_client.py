@@ -342,6 +342,9 @@ class StandXMarketMaker:
                 logger.warning(f"[WS] Order update missing order_id: {order_data}")
                 return
 
+            # Convert order_id to string for consistent comparison
+            order_id = str(order_id)
+
             status = order_data.get("status", "").lower()
             side = order_data.get("side", "")
             price = float(order_data.get("price", 0))
