@@ -302,8 +302,12 @@ class StandXMarketMaker:
     def _on_ws_order_update(self, order_data: dict):
         """WebSocket order update callback"""
         try:
+            # Debug: log raw order data
+            logger.debug(f"[WS] Raw order update: {order_data}")
+
             order_id = order_data.get("id") or order_data.get("order_id")
             if not order_id:
+                logger.warning(f"[WS] Order update missing order_id: {order_data}")
                 return
 
             status = order_data.get("status", "").lower()
@@ -311,6 +315,8 @@ class StandXMarketMaker:
             price = float(order_data.get("price", 0))
             qty = float(order_data.get("qty", 0) or order_data.get("size", 0))
             filled_qty = float(order_data.get("filled_qty", 0) or order_data.get("filled_size", 0))
+
+            logger.debug(f"[WS] Parsed: id={order_id}, status={status}, side={side}, qty={qty}, filled={filled_qty}")
 
             # Update order info
             if order_id in self.active_orders:
@@ -322,22 +328,29 @@ class StandXMarketMaker:
                     fill_value = filled_qty * price
                     logger.info(f"✓ FILLED: {side.upper()} {filled_qty} {self.symbol} @ ${price:,.2f} (${fill_value:,.2f})")
                     if self._order_update_handler:
-                        self._order_update_handler({
+                        logger.info(f"Triggering hedge callback for order {order_id}")
+                        # Schedule async callback properly
+                        import asyncio
+                        asyncio.create_task(self._order_update_handler({
                             "order_id": order_id,
                             "side": side,
                             "price": price,
                             "qty": filled_qty,
                             "status": "filled"
-                        })
+                        }))
+                    else:
+                        logger.warning("No order update handler registered!")
                     # Remove from active orders
                     del self.active_orders[order_id]
                 elif status in ["cancelled", "canceled", "rejected"]:
                     # Remove from active orders
                     if order_id in self.active_orders:
                         del self.active_orders[order_id]
+            else:
+                logger.debug(f"[WS] Order {order_id} not in active_orders (status={status})")
 
         except Exception as e:
-            logger.error(f"Error processing order update: {e}")
+            logger.error(f"Error processing order update: {e}", exc_info=True)
 
     def setup_order_update_handler(self, handler: Callable):
         """Setup callback for order fills"""

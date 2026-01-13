@@ -9,7 +9,7 @@
     "spread_percentage": 0.1,
     "_spread_comment": "挂单价差百分比，0.1 = 0.1% 在当前价格0.1%以内挂单）",
 
-    "order_size": "0.001",
+    "order_size": "0.01",
     "_order_size_comment": "单笔订单大小（BTC数量）",
 
     "leverage": 4,
