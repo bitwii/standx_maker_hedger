@@ -251,53 +251,75 @@ class StandXMarketMaker:
             return False
 
     def _perform_login(self):
-        """Synchronous login logic"""
-        # 1. Prepare signin
-        req_id = str(self.keypair.pubkey())
-        resp = requests.post(
-            f"{self.auth_url}/v1/offchain/prepare-signin?chain=solana",
-            json={"address": self.wallet_address, "requestId": req_id},
-            timeout=10
-        )
-        if not resp.ok:
-            raise ValueError(f"Prepare failed: {resp.text}")
+        """Synchronous login logic with retry"""
+        max_retries = 3
+        retry_delay = 2
 
-        data = resp.json()
-        if not data.get("success"):
-            raise ValueError(f"API Error: {data.get('message')}")
+        for attempt in range(max_retries):
+            try:
+                # 1. Prepare signin
+                req_id = str(self.keypair.pubkey())
+                logger.info(f"Attempting to connect to StandX API (attempt {attempt + 1}/{max_retries})...")
+                resp = requests.post(
+                    f"{self.auth_url}/v1/offchain/prepare-signin?chain=solana",
+                    json={"address": self.wallet_address, "requestId": req_id},
+                    timeout=30  # Increased from 10 to 30 seconds
+                )
+                if not resp.ok:
+                    raise ValueError(f"Prepare failed: {resp.text}")
 
-        signed_data_jwt = data["signedData"]
+                data = resp.json()
+                if not data.get("success"):
+                    raise ValueError(f"API Error: {data.get('message')}")
 
-        # 2. Parse JWT & Sign
-        parts = signed_data_jwt.split('.')
-        padded = parts[1] + '=' * (4 - len(parts[1]) % 4)
-        jwt_payload = json.loads(base64.b64decode(padded).decode('utf-8'))
+                signed_data_jwt = data["signedData"]
 
-        msg_bytes = jwt_payload.get("message").encode('utf-8')
-        raw_sig = bytes(self.keypair.sign_message(msg_bytes))
+                # 2. Parse JWT & Sign
+                parts = signed_data_jwt.split('.')
+                padded = parts[1] + '=' * (4 - len(parts[1]) % 4)
+                jwt_payload = json.loads(base64.b64decode(padded).decode('utf-8'))
 
-        # 3. Construct signature
-        final_sig = self.construct_solana_signature(jwt_payload, raw_sig, msg_bytes)
+                msg_bytes = jwt_payload.get("message").encode('utf-8')
+                raw_sig = bytes(self.keypair.sign_message(msg_bytes))
 
-        # 4. Login
-        resp = requests.post(
-            f"{self.auth_url}/v1/offchain/login?chain=solana",
-            json={
-                "signature": final_sig,
-                "signedData": signed_data_jwt,
-                "expiresSeconds": 604800
-            },
-            timeout=10
-        )
-        if not resp.ok:
-            raise ValueError(f"Login failed: {resp.text}")
+                # 3. Construct signature
+                final_sig = self.construct_solana_signature(jwt_payload, raw_sig, msg_bytes)
 
-        result = resp.json()
-        self.token = result.get("token")
-        if not self.token:
-            raise ValueError(f"Login failed: no token in response")
+                # 4. Login
+                resp = requests.post(
+                    f"{self.auth_url}/v1/offchain/login?chain=solana",
+                    json={
+                        "signature": final_sig,
+                        "signedData": signed_data_jwt,
+                        "expiresSeconds": 604800
+                    },
+                    timeout=30  # Increased from 10 to 30 seconds
+                )
+                if not resp.ok:
+                    raise ValueError(f"Login failed: {resp.text}")
 
-        logger.info(f"StandX Login Success (Address: {result.get('address', 'N/A')})")
+                result = resp.json()
+                self.token = result.get("token")
+                if not self.token:
+                    raise ValueError(f"Login failed: no token in response")
+
+                logger.info(f"StandX Login Success (Address: {result.get('address', 'N/A')})")
+                return  # Success, exit retry loop
+
+            except requests.exceptions.Timeout as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Connection timeout (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                    import time
+                    time.sleep(retry_delay)
+                else:
+                    raise ValueError(f"Failed to connect to StandX after {max_retries} attempts: {e}")
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Connection failed (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
+                    import time
+                    time.sleep(retry_delay)
+                else:
+                    raise
 
     async def _start_websocket(self):
         """Start WebSocket connection"""
