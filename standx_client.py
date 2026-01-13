@@ -90,22 +90,20 @@ class StandXWebSocketManager:
                 await asyncio.sleep(5)
 
     async def _authenticate_and_subscribe(self):
-        """Send authentication and subscribe to order updates"""
-        # Auth message
-        auth_msg = {
-            "method": "auth",
-            "params": {"token": self.token}
+        """
+        Send authentication and subscribe to order updates
+        Format: {"auth": {"token": "...", "streams": [{"channel": "order"}]}}
+        """
+        auth_payload = {
+            "auth": {
+                "token": self.token,
+                "streams": [
+                    {"channel": "order"}  # Subscribe to order updates
+                ]
+            }
         }
-        await self._ws.send(json.dumps(auth_msg))
-        self.logger.info("[WS] Sent authentication")
-
-        # Subscribe to order updates
-        subscribe_msg = {
-            "method": "subscribe",
-            "params": ["order"]
-        }
-        await self._ws.send(json.dumps(subscribe_msg))
-        self.logger.info("[WS] Subscribed to order updates")
+        await self._ws.send(json.dumps(auth_payload))
+        self.logger.info("[WS] Sent auth & subscription")
 
     def _handle_message(self, msg_str: str):
         """Handle WebSocket message"""
@@ -113,20 +111,28 @@ class StandXWebSocketManager:
             msg = json.loads(msg_str)
 
             # 🔥 DIAGNOSTIC: Log all messages at INFO level to debug order fill issue
-            if msg.get("type") == "order" or "order" in msg_str.lower():
+            if msg.get("channel") == "order" or "order" in msg_str.lower():
                 self.logger.info(f"[WS] RAW ORDER MESSAGE: {msg}")
 
-            # Handle different message types
-            if msg.get("type") == "order":
+            # Handle authentication response
+            if msg.get("channel") == "auth":
+                auth_data = msg.get("data", {})
+                if auth_data.get("code") == 0 or auth_data.get("message") == "success":
+                    self.logger.info("[WS] Authentication successful")
+                else:
+                    self.logger.error(f"[WS] Auth failed: {auth_data}")
+                return
+
+            # Handle order updates
+            if msg.get("channel") == "order":
                 # Order update
                 order_data = msg.get("data", {})
-                self.on_message_callback(order_data)
-            elif msg.get("type") == "pong":
-                # Pong response (heartbeat)
-                pass
-            else:
-                # Other messages
-                self.logger.debug(f"[WS] Received: {msg}")
+                if order_data:
+                    self.on_message_callback(order_data)
+                return
+
+            # Other messages (ping/pong, etc.)
+            self.logger.debug(f"[WS] Received: {msg}")
 
         except Exception as e:
             self.logger.error(f"[WS] Error handling message: {e}")
