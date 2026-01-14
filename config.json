@@ -6,8 +6,8 @@
     "symbol": "BTC-USD",
     "_symbol_comment": "交易对，格式: BTC-USD, ETH-USD 等",
 
-    "spread_percentage": 0.1,
-    "_spread_comment": "挂单价差百分比，0.1 = 0.1% 在当前价格0.1%以内挂单）",
+    "spread_percentage": 0.09,
+    "_spread_comment": "挂单价差百分比，0.09 = 0.09% (9 bps，在10 bps内获得100%积分)",
 
     "order_size": "0.01",
     "_order_size_comment": "单笔订单大小（BTC数量）",
@@ -69,8 +69,8 @@
     "hedge_immediately": true,
     "_hedge_immediately_comment": "订单成交后是否立即对冲（true=立即, false=延迟）",
 
-    "cancel_distance_percentage": 0.02,
-    "_cancel_distance_comment": "撤单距离百分比，0.05 = 5%（价格变动超过5%时撤单重挂）",
+    "cancel_distance_percentage": 0.04,
+    "_cancel_distance_comment": "撤单距离百分比，0.04 = 4 bps（订单距离市场价<4 bps时撤单重挂，避免成交）",
 
     "close_position_on_shutdown": false,
     "_close_position_comment": "关闭程序时是否自动平仓"
