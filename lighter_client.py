@@ -251,15 +251,13 @@ class LighterHedger:
         try:
             order_api = lighter.OrderApi(self.api_client)
 
-            # Get orderbook
-            orderbook_response = await order_api.order_book_details(market_id=self.market_id)
+            # Get orderbook orders (bids and asks)
+            orderbook = await order_api.order_book_orders(market_id=self.market_id, limit=10)
 
-            if not orderbook_response or not orderbook_response.order_book_details:
+            if not orderbook:
                 raise ValueError("Empty orderbook response")
 
-            orderbook = orderbook_response.order_book_details
-
-            # Get best prices
+            # Get best prices from bids and asks
             best_bid = Decimal('0')
             best_ask = Decimal('0')
 
