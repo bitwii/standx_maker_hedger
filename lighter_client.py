@@ -252,7 +252,7 @@ class LighterHedger:
             order_api = lighter.OrderApi(self.api_client)
 
             # Get orderbook
-            orderbook_response = await order_api.order_book(market_id=self.market_id)
+            orderbook_response = await order_api.order_book_details(market_id=self.market_id)
 
             if not orderbook_response or not orderbook_response.order_book:
                 raise ValueError("Empty orderbook response")
