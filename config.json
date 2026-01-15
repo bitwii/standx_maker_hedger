@@ -72,6 +72,12 @@
     "cancel_distance_percentage": 0.04,
     "_cancel_distance_comment": "撤单距离百分比，0.04 = 4 bps（订单距离市场价<4 bps时撤单重挂，避免成交）",
 
+    "close_spread_percentage": 0.01,
+    "_close_spread_comment": "平仓Maker单价差百分比，0.01 = 1 bps（距离市价1 bps，容易成交且获得Maker返佣）",
+
+    "close_order_update_threshold": 0.05,
+    "_close_order_update_comment": "平仓单更新阈值，0.05 = 5 bps（市价同向移动超过5 bps时撤单重新下单）",
+
     "close_position_on_shutdown": false,
     "_close_position_comment": "关闭程序时是否自动平仓"
   },

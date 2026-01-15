@@ -44,9 +44,18 @@ class StandXMakerHedger:
         self.check_interval = self.config.get("trading.check_interval_seconds", 5)
         self.order_size = Decimal(self.config.get("trading.order_size", "0.01"))
 
+        # Close position settings
+        self.close_spread_pct = self.config.get("strategy.close_spread_percentage", 0.01) / 100.0
+        self.close_update_threshold = self.config.get("strategy.close_order_update_threshold", 0.05) / 100.0
+
         # State tracking
         self.running = False
         self.current_price = None
+
+        # Close order tracking
+        self.close_order_id = None  # Track the close order
+        self.close_order_price = None  # Track close order price for adjustment
+        self.close_order_side = None  # Track close order side
 
         # Status tracking for smart logging
         self.last_status = {
@@ -100,6 +109,10 @@ class StandXMakerHedger:
                     # Calculate P&L (simplified - actual P&L depends on fill prices)
                     # For now, just track that we're hedged
                     self.risk_mgr.update_pnl(0.0)
+
+                    # Place close order on StandX (Maker order to close the position)
+                    # Close side is same as hedge side (opposite of original fill)
+                    await self.place_close_order(side=hedge_side, quantity=filled_qty)
                 else:
                     logger.error("FAILED TO HEDGE! Manual intervention required!")
                     self.risk_mgr.force_stop()
@@ -107,6 +120,49 @@ class StandXMakerHedger:
         except Exception as e:
             logger.error(f"Error handling fill: {e}", exc_info=True)
             self.risk_mgr.force_stop()
+
+    async def place_close_order(self, side: str, quantity: Decimal):
+        """
+        Place a Maker order to close the position.
+
+        Args:
+            side: "buy" or "sell" (opposite of the original fill)
+            quantity: Quantity to close
+        """
+        try:
+            # Get current price
+            ticker = self.standx.get_ticker()
+            mark_price = Decimal(str(ticker.get("mark_price", 0)))
+
+            if mark_price <= 0:
+                logger.error("Invalid mark price, cannot place close order")
+                return
+
+            # Calculate close order price (1 bps away from mark price)
+            close_spread = mark_price * Decimal(str(self.close_spread_pct))
+
+            if side == "buy":
+                # For buy close order, place slightly below mark (easier to fill)
+                close_price = float(int(mark_price - close_spread))
+            else:  # sell
+                # For sell close order, place slightly above mark (easier to fill)
+                close_price = float(int(mark_price + close_spread))
+
+            logger.info(f"→ Placing CLOSE order on StandX: {side.upper()} {quantity} @ ${close_price:,.2f} (Maker)")
+
+            # Place close order
+            order = await self.standx.place_order(side, close_price, float(quantity))
+
+            if order:
+                self.close_order_id = order.order_id
+                self.close_order_price = Decimal(str(close_price))
+                self.close_order_side = side
+                logger.info(f"✓ Close order placed: ID={order.order_id}")
+            else:
+                logger.error("Failed to place close order")
+
+        except Exception as e:
+            logger.error(f"Error placing close order: {e}", exc_info=True)
 
     async def place_market_making_orders(self):
         """Place bid and ask orders around current price"""
@@ -186,6 +242,141 @@ class StandXMakerHedger:
         except Exception as e:
             logger.error(f"Error checking orders: {e}", exc_info=True)
 
+    async def check_and_manage_close_orders(self):
+        """
+        Check if we have open positions that need closing.
+        Manage close orders by adjusting them if price moves significantly.
+        """
+        try:
+            # Get current positions
+            standx_pos = await self.standx.get_position()
+            lighter_pos = await self.lighter.get_position() if self.lighter.enabled else Decimal('0')
+
+            # If no positions, clear close order tracking
+            if standx_pos == 0 and lighter_pos == 0:
+                if self.close_order_id:
+                    self.close_order_id = None
+                    self.close_order_price = None
+                    self.close_order_side = None
+                return
+
+            # If we have positions but no close order, something went wrong
+            if (standx_pos != 0 or lighter_pos != 0) and not self.close_order_id:
+                logger.warning(f"Have positions (SX={standx_pos}, LT={lighter_pos}) but no close order tracked")
+                # Try to place a close order
+                if standx_pos > 0:
+                    await self.place_close_order(side="sell", quantity=abs(standx_pos))
+                elif standx_pos < 0:
+                    await self.place_close_order(side="buy", quantity=abs(standx_pos))
+                return
+
+            # If we have a close order, check if it needs adjustment
+            if self.close_order_id and self.close_order_price and self.close_order_side:
+                # Get current price
+                ticker = self.standx.get_ticker()
+                mark_price = Decimal(str(ticker.get("mark_price", 0)))
+
+                if mark_price <= 0:
+                    return
+
+                # Check if close order still exists in active orders
+                await self.standx.sync_open_orders()
+                close_order_exists = self.close_order_id in self.standx.active_orders
+
+                if not close_order_exists:
+                    # Close order was filled or cancelled
+                    logger.info(f"Close order {self.close_order_id} no longer active")
+
+                    # Check if position is closed
+                    standx_pos_after = await self.standx.get_position()
+
+                    if standx_pos_after == 0:
+                        # Position closed! Now close Lighter hedge
+                        logger.info("✓ StandX position closed via Maker order!")
+                        await self.close_lighter_hedge(lighter_pos)
+
+                        # Clear close order tracking
+                        self.close_order_id = None
+                        self.close_order_price = None
+                        self.close_order_side = None
+                    else:
+                        # Order was cancelled but position still open, place new close order
+                        logger.warning("Close order cancelled but position still open, replacing...")
+                        if standx_pos_after > 0:
+                            await self.place_close_order(side="sell", quantity=abs(standx_pos_after))
+                        elif standx_pos_after < 0:
+                            await self.place_close_order(side="buy", quantity=abs(standx_pos_after))
+
+                    return
+
+                # Check if price has moved significantly in the favorable direction
+                # For sell close order: if price rises, adjust order upward
+                # For buy close order: if price falls, adjust order downward
+                price_diff = mark_price - self.close_order_price
+                price_diff_pct = abs(price_diff) / mark_price
+
+                needs_adjustment = False
+
+                if self.close_order_side == "sell" and price_diff > 0:
+                    # Price rose, sell order should be adjusted higher
+                    if price_diff_pct > Decimal(str(self.close_update_threshold)):
+                        logger.info(f"Price rose from ${self.close_order_price:,.2f} to ${mark_price:,.2f}, adjusting sell close order")
+                        needs_adjustment = True
+                elif self.close_order_side == "buy" and price_diff < 0:
+                    # Price fell, buy order should be adjusted lower
+                    if price_diff_pct > Decimal(str(self.close_update_threshold)):
+                        logger.info(f"Price fell from ${self.close_order_price:,.2f} to ${mark_price:,.2f}, adjusting buy close order")
+                        needs_adjustment = True
+
+                if needs_adjustment:
+                    # Cancel current close order and place new one
+                    logger.info(f"Cancelling close order {self.close_order_id} for adjustment")
+                    await self.standx.cancel_order(self.close_order_id)
+                    await asyncio.sleep(0.5)  # Brief pause
+
+                    # Place new close order at current price
+                    if standx_pos > 0:
+                        await self.place_close_order(side="sell", quantity=abs(standx_pos))
+                    elif standx_pos < 0:
+                        await self.place_close_order(side="buy", quantity=abs(standx_pos))
+
+        except Exception as e:
+            logger.error(f"Error managing close orders: {e}", exc_info=True)
+
+    async def close_lighter_hedge(self, lighter_pos: Decimal):
+        """
+        Close the Lighter hedge position after StandX position is closed.
+
+        Args:
+            lighter_pos: Current Lighter position
+        """
+        try:
+            if lighter_pos == 0:
+                logger.info("No Lighter position to close")
+                return
+
+            # Determine close side (opposite of current position)
+            close_side = "buy" if lighter_pos < 0 else "sell"
+            close_qty = abs(lighter_pos)
+
+            logger.info(f"→ Closing Lighter hedge: {close_side.upper()} {close_qty}")
+
+            # Close Lighter position (free trading on Lighter)
+            success = await self.lighter.place_hedge_order(
+                side=close_side,
+                quantity=close_qty,
+                price=None  # Market price
+            )
+
+            if success:
+                logger.info("✓ Lighter hedge closed successfully")
+            else:
+                logger.error("Failed to close Lighter hedge")
+
+        except Exception as e:
+            logger.error(f"Error closing Lighter hedge: {e}", exc_info=True)
+
+
     async def run(self):
         """Main bot execution loop"""
         logger.info("=" * 60)
@@ -237,6 +428,9 @@ class StandXMakerHedger:
 
                 # Check and update orders
                 await self.check_and_update_orders()
+
+                # Check and manage close orders (if we have open positions)
+                await self.check_and_manage_close_orders()
 
                 # Print status only if needed (changes or hourly)
                 await self.print_status_if_needed()
