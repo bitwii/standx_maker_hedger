@@ -368,6 +368,7 @@ class StandXMakerHedger:
         """
         Close the Lighter hedge position after StandX position is closed.
         Implements retry logic for handling margin errors and transient failures.
+        Uses market orders since Lighter has no fees.
 
         Args:
             lighter_pos: Current Lighter position
@@ -386,11 +387,10 @@ class StandXMakerHedger:
 
             # Retry loop for handling transient failures
             for attempt in range(1, max_retries + 1):
-                # Close Lighter position (free trading on Lighter)
-                success = await self.lighter.place_hedge_order(
+                # Close Lighter position using market order (no fees on Lighter)
+                success = await self.lighter.place_market_close_order(
                     side=close_side,
-                    quantity=close_qty,
-                    price=None  # Market price
+                    quantity=close_qty
                 )
 
                 if success:

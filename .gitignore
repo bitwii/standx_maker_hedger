@@ -12,6 +12,16 @@ logs/
 *.log
 CHANGELOG.md
 
+# Fix documentation (internal use only)
+FIX_*.md
+*_FIX*.md
+DIAGNOSTIC_*.md
+*_DIAGNOSTIC*.md
+ENABLE_*.md
+HEDGING_FIX.md
+WEBSOCKET_FIX.md
+SETUP_SUMMARY.md
+
 # IDE
 .vscode/
 .idea/

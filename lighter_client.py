@@ -241,6 +241,67 @@ class LighterHedger:
             logger.error(f"Failed to place Lighter hedge order: {e}")
             return False
 
+    async def place_market_close_order(self, side: str, quantity: Decimal) -> bool:
+        """
+        Place a market order to close Lighter position.
+        Since Lighter has no fees, we use market orders for instant execution.
+
+        Args:
+            side: "buy" or "sell"
+            quantity: Order quantity
+
+        Returns:
+            True if successful
+        """
+        if not self.enabled:
+            logger.warning("Lighter hedging disabled, skipping market close order")
+            return False
+
+        try:
+            # Determine order side
+            is_ask = True if side.lower() == 'sell' else False
+
+            # Generate unique client order index
+            client_order_index = int(time.time() * 1000) % 1000000
+
+            # Get current market price for logging
+            best_bid, best_ask = await self.fetch_bbo_prices()
+            expected_price = best_ask if side.lower() == 'buy' else best_bid
+
+            # Calculate expected value
+            hedge_value = float(quantity) * float(expected_price)
+            logger.info(f"→ Closing Lighter position with MARKET order: {side.upper()} {quantity} {self.ticker_symbol} @ ~${expected_price:,.2f} (${hedge_value:,.2f})")
+
+            # Submit market order
+            # avg_execution_price is used as a slippage protection, set it generously
+            slippage_multiplier = Decimal('1.05') if side.lower() == 'buy' else Decimal('0.95')
+            avg_execution_price = int(expected_price * slippage_multiplier * self.price_multiplier)
+
+            create_order, _, error = await self.lighter_client.create_market_order(
+                market_index=self.market_id,
+                client_order_index=client_order_index,
+                base_amount=int(quantity * self.base_amount_multiplier),
+                avg_execution_price=avg_execution_price,
+                is_ask=is_ask,
+                reduce_only=False
+            )
+
+            if error is not None:
+                logger.error(f"✗ Market close FAILED: {error}")
+                return False
+
+            logger.info(f"✓ Market close order placed successfully")
+
+            # Update position tracking
+            qty_signed = quantity if side.lower() == 'buy' else -quantity
+            self.current_position += qty_signed
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to place Lighter market close order: {e}")
+            return False
+
     async def fetch_bbo_prices(self) -> Tuple[Decimal, Decimal]:
         """
         Get best bid/offer from orderbook.
