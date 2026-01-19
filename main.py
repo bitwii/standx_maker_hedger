@@ -71,6 +71,7 @@ class StandXMakerHedger:
         # Loop protection for Lighter position closing
         self.lighter_close_attempts = {}  # Track close attempts per position
         self.max_close_attempts = 10  # Maximum attempts before requiring manual intervention
+        self.lighter_close_blocked = set()  # Positions that have exceeded max attempts
 
         logger.info("StandX Maker Hedger initialized successfully")
 
@@ -283,12 +284,20 @@ class StandXMakerHedger:
                 elif standx_pos == 0 and lighter_pos != 0:
                     # Check loop protection
                     pos_key = f"{lighter_pos:.5f}"
+
+                    # Check if this position is blocked from further attempts
+                    if pos_key in self.lighter_close_blocked:
+                        # Silently skip - already logged the error
+                        return
+
                     attempts = self.lighter_close_attempts.get(pos_key, 0)
 
                     if attempts >= self.max_close_attempts:
                         logger.error(f"CRITICAL: Failed to close Lighter position {lighter_pos} BTC after {attempts} attempts")
                         logger.error("MANUAL INTERVENTION REQUIRED - Stopping auto-close attempts for this position")
                         logger.error("Please manually close the Lighter position and restart the bot")
+                        # Block further attempts for this position
+                        self.lighter_close_blocked.add(pos_key)
                         return
 
                     self.lighter_close_attempts[pos_key] = attempts + 1
@@ -303,6 +312,8 @@ class StandXMakerHedger:
                         # Successfully closed, clear the attempt counter
                         if pos_key in self.lighter_close_attempts:
                             del self.lighter_close_attempts[pos_key]
+                        if pos_key in self.lighter_close_blocked:
+                            self.lighter_close_blocked.remove(pos_key)
                         logger.info("✓ Lighter position successfully closed, cleared attempt counter")
 
                 return
@@ -410,10 +421,12 @@ class StandXMakerHedger:
                 return
 
             # Determine close side (opposite of current position)
+            # Positive position = long = need to SELL to close
+            # Negative position = short = need to BUY to close
             close_side = "buy" if lighter_pos < 0 else "sell"
             close_qty = abs(lighter_pos)
 
-            logger.info(f"→ Closing Lighter hedge: {close_side.upper()} {close_qty}")
+            logger.info(f"→ Closing Lighter hedge: {close_side.upper()} {close_qty} (current position: {lighter_pos})")
 
             # Retry loop for handling transient failures
             for attempt in range(1, max_retries + 1):

@@ -288,11 +288,13 @@ class LighterHedger:
 
             if error is not None:
                 logger.error(f"✗ Market close FAILED: {error}")
+                logger.error(f"Order parameters: side={side}, quantity={quantity}, is_ask={is_ask}, reduce_only=True")
                 return False
 
             logger.info(f"✓ Market close order placed successfully")
             if create_order:
                 logger.debug(f"Order details: client_order_index={client_order_index}, base_amount={int(quantity * self.base_amount_multiplier)}, reduce_only=True")
+                logger.debug(f"Order response: {create_order}")
 
             # Note: Position will be updated on next get_position() call from API
             # Don't update local tracking here as order may not be filled immediately
@@ -359,6 +361,7 @@ class LighterHedger:
                 if position.market_id == self.market_id:
                     pos_size = Decimal(str(position.position))
                     self.current_position = pos_size
+                    logger.debug(f"Lighter position for market {self.market_id}: {pos_size} (raw: {position.position})")
                     return pos_size
 
             return Decimal('0')
