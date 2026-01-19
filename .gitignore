@@ -10,7 +10,8 @@ __pycache__/
 # Logs
 logs/
 *.log
-CHANGELOG.md
+*.md
+!README.md
 
 # Fix documentation (internal use only)
 FIX_*.md

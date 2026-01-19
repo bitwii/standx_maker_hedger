@@ -200,6 +200,9 @@ class StandXMarketMaker:
         # Track active orders
         self.active_orders: Dict[str, OrderInfo] = {}
 
+        # Track processed fills to prevent duplicate hedge triggers
+        self.processed_fills: set = set()
+
         # Current market price
         self.current_price = None
 
@@ -355,8 +358,20 @@ class StandXMarketMaker:
                 order_info = self.active_orders[order_id]
                 order_info.status = status
 
-                # If filled, trigger callback
-                if status in ["filled", "completed"] and filled_qty > 0:
+                # Check if order has any fills (even if status is cancelled)
+                # This handles the race condition where an order is filled during cancellation
+                if filled_qty > 0:
+                    # Check if we've already processed this fill to prevent duplicate hedges
+                    if order_id in self.processed_fills:
+                        logger.debug(f"Order {order_id} already processed, skipping duplicate fill trigger")
+                        # Still remove from active orders if needed
+                        if order_id in self.active_orders:
+                            del self.active_orders[order_id]
+                        return
+
+                    # Mark as processed
+                    self.processed_fills.add(order_id)
+
                     fill_value = filled_qty * price
                     logger.info(f"✓ FILLED: {side.upper()} {filled_qty} {self.symbol} @ ${price:,.2f} (${fill_value:,.2f})")
                     if self._order_update_handler:
@@ -375,7 +390,8 @@ class StandXMarketMaker:
                     # Remove from active orders
                     del self.active_orders[order_id]
                 elif status in ["cancelled", "canceled", "rejected"]:
-                    # Remove from active orders
+                    # Only remove if no fills (filled_qty == 0)
+                    # This prevents removing orders that were filled during cancellation
                     if order_id in self.active_orders:
                         del self.active_orders[order_id]
 
@@ -531,6 +547,14 @@ class StandXMarketMaker:
 
             self.active_orders = new_active_orders
             logger.debug(f"Synced {len(self.active_orders)} open orders")
+
+            # Clean up processed_fills set - keep only recent entries (last 1000)
+            # This prevents memory leak from accumulating order IDs
+            if len(self.processed_fills) > 1000:
+                # Convert to list, keep last 500, convert back to set
+                recent_fills = list(self.processed_fills)[-500:]
+                self.processed_fills = set(recent_fills)
+                logger.debug(f"Cleaned up processed_fills, kept {len(self.processed_fills)} recent entries")
 
         except Exception as e:
             logger.error(f"Failed to sync orders: {e}")
