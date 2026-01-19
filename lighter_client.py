@@ -283,7 +283,7 @@ class LighterHedger:
                 base_amount=int(quantity * self.base_amount_multiplier),
                 avg_execution_price=avg_execution_price,
                 is_ask=is_ask,
-                reduce_only=False
+                reduce_only=True  # Ensure we only reduce position, never reverse it
             )
 
             if error is not None:
@@ -291,10 +291,11 @@ class LighterHedger:
                 return False
 
             logger.info(f"✓ Market close order placed successfully")
+            if create_order:
+                logger.debug(f"Order details: client_order_index={client_order_index}, base_amount={int(quantity * self.base_amount_multiplier)}, reduce_only=True")
 
-            # Update position tracking
-            qty_signed = quantity if side.lower() == 'buy' else -quantity
-            self.current_position += qty_signed
+            # Note: Position will be updated on next get_position() call from API
+            # Don't update local tracking here as order may not be filled immediately
 
             return True
 

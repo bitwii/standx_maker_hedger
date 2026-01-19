@@ -68,6 +68,10 @@ class StandXMakerHedger:
         }
         self.last_hourly_status_time = 0
 
+        # Loop protection for Lighter position closing
+        self.lighter_close_attempts = {}  # Track close attempts per position
+        self.max_close_attempts = 10  # Maximum attempts before requiring manual intervention
+
         logger.info("StandX Maker Hedger initialized successfully")
 
     async def handle_standx_order_fill(self, order_data: dict):
@@ -277,8 +281,29 @@ class StandXMakerHedger:
                     await self.place_close_order(side="buy", quantity=abs(standx_pos))
                 # Handle Lighter-only position (StandX already closed but Lighter still open)
                 elif standx_pos == 0 and lighter_pos != 0:
-                    logger.warning(f"StandX position is 0 but Lighter has {lighter_pos} BTC, attempting to close Lighter position")
+                    # Check loop protection
+                    pos_key = f"{lighter_pos:.5f}"
+                    attempts = self.lighter_close_attempts.get(pos_key, 0)
+
+                    if attempts >= self.max_close_attempts:
+                        logger.error(f"CRITICAL: Failed to close Lighter position {lighter_pos} BTC after {attempts} attempts")
+                        logger.error("MANUAL INTERVENTION REQUIRED - Stopping auto-close attempts for this position")
+                        logger.error("Please manually close the Lighter position and restart the bot")
+                        return
+
+                    self.lighter_close_attempts[pos_key] = attempts + 1
+                    logger.warning(f"StandX position is 0 but Lighter has {lighter_pos} BTC (attempt {attempts + 1}/{self.max_close_attempts})")
                     await self.close_lighter_hedge(lighter_pos)
+
+                    # If close was successful, reset the counter
+                    # Re-check position after close attempt
+                    await asyncio.sleep(1)
+                    new_lighter_pos = await self.lighter.get_position()
+                    if new_lighter_pos == 0:
+                        # Successfully closed, clear the attempt counter
+                        if pos_key in self.lighter_close_attempts:
+                            del self.lighter_close_attempts[pos_key]
+                        logger.info("✓ Lighter position successfully closed, cleared attempt counter")
 
                 return
 
@@ -399,8 +424,28 @@ class StandXMakerHedger:
                 )
 
                 if success:
-                    logger.info("✓ Lighter hedge closed successfully")
-                    return
+                    logger.info("✓ Lighter hedge close order submitted")
+
+                    # Wait for order to be processed and verify position is closed
+                    await asyncio.sleep(2)
+
+                    # Re-fetch actual position from API
+                    actual_pos = await self.lighter.get_position()
+
+                    if actual_pos == 0:
+                        logger.info("✓ Verified: Lighter position successfully closed (position = 0)")
+                        return
+                    else:
+                        logger.warning(f"Position verification failed: {actual_pos} BTC still open after close attempt")
+                        # Continue to retry
+                        if attempt < max_retries:
+                            wait_time = attempt * 2
+                            logger.warning(f"Retrying close (attempt {attempt + 1}/{max_retries}) in {wait_time}s...")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            logger.error(f"Failed to close Lighter hedge after {max_retries} attempts")
+                            logger.error(f"CRITICAL: Manual intervention required - Lighter position {actual_pos} BTC still open!")
+                            return
                 else:
                     if attempt < max_retries:
                         wait_time = attempt * 2  # Exponential backoff: 2s, 4s, 6s
