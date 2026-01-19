@@ -155,6 +155,9 @@ class StandXMakerHedger:
             order = await self.standx.place_order(side, close_price, float(quantity))
 
             if order:
+                # Mark this order as a close order (should NOT trigger hedge when filled)
+                self.standx.mark_as_close_order(order.order_id)
+
                 # Save cl_ord_id for tracking (real order_id will come from WebSocket)
                 self.close_order_cl_ord_id = order.cl_ord_id
                 self.close_order_price = Decimal(str(close_price))
@@ -301,6 +304,8 @@ class StandXMakerHedger:
                         # Update real order_id if we haven't saved it yet
                         if not self.close_order_id:
                             self.close_order_id = order_id
+                            # Mark this order as a close order
+                            self.standx.mark_as_close_order(order_id)
                         break
 
                 if not close_order_exists:

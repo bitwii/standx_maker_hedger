@@ -203,6 +203,10 @@ class StandXMarketMaker:
         # Track processed fills to prevent duplicate hedge triggers
         self.processed_fills: set = set()
 
+        # Track close orders (orders that are closing positions, not opening)
+        # These should NOT trigger hedges when filled
+        self.close_order_ids: set = set()
+
         # Current market price
         self.current_price = None
 
@@ -374,6 +378,17 @@ class StandXMarketMaker:
 
                     fill_value = filled_qty * price
                     logger.info(f"✓ FILLED: {side.upper()} {filled_qty} {self.symbol} @ ${price:,.2f} (${fill_value:,.2f})")
+
+                    # Check if this is a close order (should NOT trigger hedge)
+                    if order_id in self.close_order_ids:
+                        logger.info(f"Order {order_id} is a close order, NOT triggering hedge")
+                        # Remove from close_order_ids tracking
+                        self.close_order_ids.discard(order_id)
+                        # Remove from active orders
+                        del self.active_orders[order_id]
+                        return
+
+                    # This is a market-making order, trigger hedge
                     if self._order_update_handler:
                         logger.info(f"Triggering hedge for order {order_id}")
                         # Schedule async callback properly
@@ -394,6 +409,8 @@ class StandXMarketMaker:
                     # This prevents removing orders that were filled during cancellation
                     if order_id in self.active_orders:
                         del self.active_orders[order_id]
+                    # Also clean up from close_order_ids if it was a close order
+                    self.close_order_ids.discard(order_id)
 
         except Exception as e:
             logger.error(f"Error processing order update: {e}", exc_info=True)
@@ -401,6 +418,17 @@ class StandXMarketMaker:
     def setup_order_update_handler(self, handler: Callable):
         """Setup callback for order fills"""
         self._order_update_handler = handler
+
+    def mark_as_close_order(self, order_id: str):
+        """
+        Mark an order as a close order (position-closing order).
+        Close orders should NOT trigger hedges when filled.
+
+        Args:
+            order_id: The order ID to mark as close order
+        """
+        self.close_order_ids.add(str(order_id))
+        logger.debug(f"Marked order {order_id} as close order (will not trigger hedge)")
 
     def get_ticker(self, symbol: str = None) -> dict:
         """Get current ticker data (BBO)"""
@@ -555,6 +583,10 @@ class StandXMarketMaker:
                 recent_fills = list(self.processed_fills)[-500:]
                 self.processed_fills = set(recent_fills)
                 logger.debug(f"Cleaned up processed_fills, kept {len(self.processed_fills)} recent entries")
+
+            # Clean up close_order_ids - remove orders that are no longer active
+            active_order_ids = set(self.active_orders.keys())
+            self.close_order_ids = self.close_order_ids.intersection(active_order_ids)
 
         except Exception as e:
             logger.error(f"Failed to sync orders: {e}")
