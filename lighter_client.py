@@ -205,20 +205,29 @@ class LighterHedger:
             # Generate unique client order index
             client_order_index = int(time.time() * 1000) % 1000000
 
+            # Get current market price for market order
+            best_bid, best_ask = await self.fetch_bbo_prices()
+            expected_price = best_ask if side.lower() == 'buy' else best_bid
+
+            # Calculate avg_execution_price with slippage protection
+            # For buy: use higher price (1.05x), for sell: use lower price (0.95x)
+            slippage_multiplier = Decimal('1.05') if side.lower() == 'buy' else Decimal('0.95')
+            avg_execution_price = int(expected_price * slippage_multiplier * self.price_multiplier)
+
             # Use market order for immediate execution
             order_params = {
                 'market_index': self.market_id,
                 'client_order_index': client_order_index,
                 'base_amount': int(quantity * self.base_amount_multiplier),
-                'price': 0,  # Market order uses price 0
+                'price': avg_execution_price,  # Market order with slippage protection
                 'is_ask': is_ask,
-                'order_type': self.lighter_client.ORDER_TYPE_MARKET,  # Changed to MARKET
+                'order_type': self.lighter_client.ORDER_TYPE_MARKET,
                 'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
                 'reduce_only': False,
                 'trigger_price': 0,
             }
 
-            logger.info(f"→ Hedging on Lighter: MARKET {side.upper()} {quantity} {self.ticker_symbol}")
+            logger.info(f"→ Hedging on Lighter: MARKET {side.upper()} {quantity} {self.ticker_symbol} @ ~${expected_price:,.2f}")
 
             # Submit order
             create_order, _, error = await self.lighter_client.create_order(**order_params)
