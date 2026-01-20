@@ -407,72 +407,118 @@ class StandXMakerHedger:
         except Exception as e:
             logger.error(f"Error managing close orders: {e}", exc_info=True)
 
-    async def close_lighter_hedge(self, lighter_pos: Decimal, max_retries: int = 3):
+    async def sync_hedge_positions(self, max_retries: int = 3) -> bool:
         """
-        Close the Lighter hedge position after StandX position is closed.
-        Implements retry logic for handling margin errors and transient failures.
-        Uses market orders since Lighter has no fees.
+        Synchronize hedge positions to maintain balance: StandX + Lighter = 0.
+        Handles partial fills and position imbalances.
 
         Args:
-            lighter_pos: Current Lighter position
+            max_retries: Maximum number of retry attempts
+
+        Returns:
+            True if positions are balanced, False otherwise
+        """
+        try:
+            # Get current positions
+            standx_pos = await self.standx.get_position()
+            lighter_pos = await self.lighter.get_position() if self.lighter.enabled else Decimal('0')
+
+            # Calculate target Lighter position (should be opposite of StandX)
+            target_lighter_pos = -standx_pos
+
+            # Calculate adjustment needed
+            adjustment = target_lighter_pos - lighter_pos
+
+            # Check if adjustment is needed (with small tolerance)
+            if abs(adjustment) < Decimal('0.0001'):
+                logger.debug(f"Positions balanced: SX={standx_pos}, LT={lighter_pos}")
+                return True
+
+            # Log imbalance
+            total = standx_pos + lighter_pos
+            logger.warning(f"Hedge imbalance detected:")
+            logger.warning(f"  StandX: {standx_pos} BTC")
+            logger.warning(f"  Lighter: {lighter_pos} BTC")
+            logger.warning(f"  Total: {total} BTC (should be 0)")
+            logger.warning(f"  Adjustment needed: {adjustment} BTC")
+
+            # Retry loop for adjustment
+            for attempt in range(1, max_retries + 1):
+                if adjustment > 0:
+                    # Need to increase Lighter long (or decrease short)
+                    logger.info(f"→ Adjusting Lighter: BUY {abs(adjustment)} BTC (attempt {attempt}/{max_retries})")
+                    success = await self.lighter.place_hedge_order(
+                        side="buy",
+                        quantity=abs(adjustment)
+                    )
+                else:
+                    # Need to increase Lighter short (or decrease long)
+                    logger.info(f"→ Adjusting Lighter: SELL {abs(adjustment)} BTC (attempt {attempt}/{max_retries})")
+                    success = await self.lighter.place_hedge_order(
+                        side="sell",
+                        quantity=abs(adjustment)
+                    )
+
+                if success:
+                    # Verify positions are now balanced
+                    await asyncio.sleep(0.5)
+
+                    standx_pos_after = await self.standx.get_position()
+                    lighter_pos_after = await self.lighter.get_position()
+                    total_after = standx_pos_after + lighter_pos_after
+
+                    if abs(total_after) < Decimal('0.0001'):
+                        logger.info(f"✓ Positions balanced: SX={standx_pos_after}, LT={lighter_pos_after}")
+                        return True
+                    else:
+                        logger.warning(f"Positions still imbalanced: total={total_after} (attempt {attempt}/{max_retries})")
+                        if attempt < max_retries:
+                            # Recalculate adjustment for next attempt
+                            target_lighter_pos = -standx_pos_after
+                            adjustment = target_lighter_pos - lighter_pos_after
+                            await asyncio.sleep(attempt)  # Backoff
+                        else:
+                            logger.error(f"Failed to balance positions after {max_retries} attempts")
+                            logger.error(f"Final state: SX={standx_pos_after}, LT={lighter_pos_after}, Total={total_after}")
+                            return False
+                else:
+                    logger.error(f"Failed to adjust Lighter position (attempt {attempt}/{max_retries})")
+                    if attempt < max_retries:
+                        await asyncio.sleep(attempt)
+                    else:
+                        return False
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Error syncing hedge positions: {e}", exc_info=True)
+            return False
+
+    async def close_lighter_hedge(self, lighter_pos: Decimal, max_retries: int = 3):
+        """
+        Adjust Lighter hedge position to match StandX position.
+        This method now uses sync_hedge_positions to handle partial fills correctly.
+
+        Args:
+            lighter_pos: Current Lighter position (for logging, actual position is queried)
             max_retries: Maximum number of retry attempts (default: 3)
         """
         try:
-            if lighter_pos == 0:
-                logger.info("No Lighter position to close")
-                return
+            logger.info(f"→ Adjusting Lighter hedge (current: {lighter_pos} BTC)")
 
-            # Determine close side (opposite of current position)
-            # Positive position = long = need to SELL to close
-            # Negative position = short = need to BUY to close
-            close_side = "buy" if lighter_pos < 0 else "sell"
-            close_qty = abs(lighter_pos)
+            # Use sync_hedge_positions to balance positions
+            # This handles partial fills correctly
+            success = await self.sync_hedge_positions(max_retries=max_retries)
 
-            logger.info(f"→ Closing Lighter hedge: {close_side.upper()} {close_qty} (current position: {lighter_pos})")
-
-            # Retry loop for handling transient failures
-            for attempt in range(1, max_retries + 1):
-                # Close Lighter position using market order (no fees on Lighter)
-                success = await self.lighter.place_market_close_order(
-                    side=close_side,
-                    quantity=close_qty
-                )
-
-                if success:
-                    logger.info("✓ Lighter hedge close order submitted")
-
-                    # Wait for order to be processed and verify position is closed
-                    await asyncio.sleep(2)
-
-                    # Re-fetch actual position from API
-                    actual_pos = await self.lighter.get_position()
-
-                    if actual_pos == 0:
-                        logger.info("✓ Verified: Lighter position successfully closed (position = 0)")
-                        return
-                    else:
-                        logger.warning(f"Position verification failed: {actual_pos} BTC still open after close attempt")
-                        # Continue to retry
-                        if attempt < max_retries:
-                            wait_time = attempt * 2
-                            logger.warning(f"Retrying close (attempt {attempt + 1}/{max_retries}) in {wait_time}s...")
-                            await asyncio.sleep(wait_time)
-                        else:
-                            logger.error(f"Failed to close Lighter hedge after {max_retries} attempts")
-                            logger.error(f"CRITICAL: Manual intervention required - Lighter position {actual_pos} BTC still open!")
-                            return
-                else:
-                    if attempt < max_retries:
-                        wait_time = attempt * 2  # Exponential backoff: 2s, 4s, 6s
-                        logger.warning(f"Failed to close Lighter hedge (attempt {attempt}/{max_retries}), retrying in {wait_time}s...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error(f"Failed to close Lighter hedge after {max_retries} attempts")
-                        logger.error(f"CRITICAL: Manual intervention required - Lighter position {lighter_pos} BTC still open!")
+            if success:
+                logger.info("✓ Lighter hedge adjusted successfully")
+            else:
+                logger.error("✗ Failed to adjust Lighter hedge")
+                logger.error("CRITICAL: Manual intervention may be required!")
 
         except Exception as e:
-            logger.error(f"Error closing Lighter hedge: {e}", exc_info=True)
-            logger.error(f"CRITICAL: Manual intervention required - Lighter position {lighter_pos} BTC may still be open!")
+            logger.error(f"Error adjusting Lighter hedge: {e}", exc_info=True)
+            logger.error(f"CRITICAL: Manual intervention required!")
 
 
     async def run(self):
@@ -529,6 +575,11 @@ class StandXMakerHedger:
 
                 # Check and manage close orders (if we have open positions)
                 await self.check_and_manage_close_orders()
+
+                # Sync hedge positions to handle partial fills
+                # This ensures StandX + Lighter = 0 at all times
+                if self.lighter.enabled:
+                    await self.sync_hedge_positions()
 
                 # Print status only if needed (changes or hourly)
                 await self.print_status_if_needed()
