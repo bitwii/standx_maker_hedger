@@ -138,23 +138,24 @@ class StandXMakerHedger:
             quantity: Quantity to close
         """
         try:
-            # Get current price
+            # Get current ticker with bid/ask prices
             ticker = self.standx.get_ticker()
-            mark_price = Decimal(str(ticker.get("mark_price", 0)))
+            best_bid = Decimal(str(ticker.get("bid_price", 0)))
+            best_ask = Decimal(str(ticker.get("ask_price", 0)))
 
-            if mark_price <= 0:
-                logger.error("Invalid mark price, cannot place close order")
+            if best_bid <= 0 or best_ask <= 0:
+                logger.error("Invalid bid/ask prices, cannot place close order")
                 return
 
-            # Calculate close order price (1 bps away from mark price)
-            close_spread = mark_price * Decimal(str(self.close_spread_pct))
+            # StandX tick size is 0.1
+            tick_size = Decimal("0.1")
 
             if side == "buy":
-                # For buy close order, place slightly below mark (easier to fill)
-                close_price = float(int(mark_price - close_spread))
+                # For buy close order, place at best ask minus one tick (easier to fill as Maker)
+                close_price = float(best_ask - tick_size)
             else:  # sell
-                # For sell close order, place slightly above mark (easier to fill)
-                close_price = float(int(mark_price + close_spread))
+                # For sell close order, place at best bid plus one tick (easier to fill as Maker)
+                close_price = float(best_bid + tick_size)
 
             logger.info(f"→ Placing CLOSE order on StandX: {side.upper()} {quantity} @ ${close_price:,.2f} (Maker)")
 
