@@ -200,9 +200,10 @@ class LighterHedger:
             logger.info(f"Position before hedge: {position_before} {self.ticker_symbol}")
 
             # Determine order side
-            # IMPORTANT: is_ask means "is this an ask order (sell order)"
-            # is_ask=True for sell, is_ask=False for buy
-            is_ask = True if side.lower() == 'sell' else False
+            # IMPORTANT: Lighter's is_ask parameter is REVERSED from intuition!
+            # is_ask=False for sell (we are taking from the ask side)
+            # is_ask=True for buy (we are taking from the bid side)
+            is_ask = False if side.lower() == 'sell' else True
 
             logger.info(f"[DEBUG] Hedge order: side={side}, is_ask={is_ask}, quantity={quantity}")
 
@@ -291,7 +292,9 @@ class LighterHedger:
             logger.info(f"Position before close: {position_before} {self.ticker_symbol}")
 
             # Determine order side
-            is_ask = True if side.lower() == 'sell' else False
+            # IMPORTANT: Lighter's is_ask parameter is REVERSED!
+            # is_ask=False for sell, is_ask=True for buy
+            is_ask = False if side.lower() == 'sell' else True
 
             # Generate unique client order index
             client_order_index = int(time.time() * 1000) % 1000000
