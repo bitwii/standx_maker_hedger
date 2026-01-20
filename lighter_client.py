@@ -214,23 +214,17 @@ class LighterHedger:
             slippage_multiplier = Decimal('1.05') if side.lower() == 'buy' else Decimal('0.95')
             avg_execution_price = int(expected_price * slippage_multiplier * self.price_multiplier)
 
-            # Use market order for immediate execution
-            order_params = {
-                'market_index': self.market_id,
-                'client_order_index': client_order_index,
-                'base_amount': int(quantity * self.base_amount_multiplier),
-                'price': avg_execution_price,  # Market order with slippage protection
-                'is_ask': is_ask,
-                'order_type': self.lighter_client.ORDER_TYPE_MARKET,
-                'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
-                'reduce_only': False,
-                'trigger_price': 0,
-            }
-
             logger.info(f"→ Hedging on Lighter: MARKET {side.upper()} {quantity} {self.ticker_symbol} @ ~${expected_price:,.2f}")
 
-            # Submit order
-            create_order, _, error = await self.lighter_client.create_order(**order_params)
+            # Submit market order using create_market_order (same as place_market_close_order)
+            create_order, _, error = await self.lighter_client.create_market_order(
+                market_index=self.market_id,
+                client_order_index=client_order_index,
+                base_amount=int(quantity * self.base_amount_multiplier),
+                avg_execution_price=avg_execution_price,
+                is_ask=is_ask,
+                reduce_only=False
+            )
 
             if error is not None:
                 logger.error(f"✗ Hedge FAILED: {error}")
