@@ -92,6 +92,9 @@ class LighterHedger:
         self.orders_cache = {}
         self.current_order = None
 
+        # Concurrency control - prevent race conditions in hedge operations
+        self._hedge_lock = asyncio.Lock()
+
         logger.info(f"Initialized Lighter Hedger (enabled={self.enabled})")
 
     async def connect(self) -> bool:
@@ -194,79 +197,89 @@ class LighterHedger:
             logger.warning("Lighter hedging disabled, skipping hedge order")
             return False
 
-        try:
-            # Record position before placing order
-            position_before = await self.get_position()
-            logger.info(f"Position before hedge: {position_before} {self.ticker_symbol}")
+        # Acquire lock to prevent concurrent hedge operations
+        logger.info(f"[HEDGE-LOCK] Waiting for lock: {side.upper()} {quantity} {self.ticker_symbol}")
+        async with self._hedge_lock:
+            logger.info(f"[HEDGE-LOCK] Lock acquired: {side.upper()} {quantity} {self.ticker_symbol}")
 
-            # Determine order side
-            # is_ask=True for sell, is_ask=False for buy
-            is_ask = True if side.lower() == 'sell' else False
+            try:
+                # Record position before placing order
+                position_before = await self.get_position()
+                logger.info(f"Position before hedge: {position_before} {self.ticker_symbol}")
 
-            logger.info(f"[DEBUG] Hedge order: side={side}, is_ask={is_ask}, quantity={quantity}")
+                # Determine order side
+                # is_ask=True for sell, is_ask=False for buy
+                is_ask = True if side.lower() == 'sell' else False
 
-            # Generate unique client order index
-            client_order_index = int(time.time() * 1000) % 1000000
+                logger.info(f"[DEBUG] Hedge order: side={side}, is_ask={is_ask}, quantity={quantity}")
 
-            # Get current market price for market order
-            best_bid, best_ask = await self.fetch_bbo_prices()
-            expected_price = best_ask if side.lower() == 'buy' else best_bid
+                # Generate unique client order index
+                client_order_index = int(time.time() * 1000) % 1000000
 
-            # Calculate avg_execution_price with slippage protection
-            # For buy: use higher price (1.05x), for sell: use lower price (0.95x)
-            slippage_multiplier = Decimal('1.05') if side.lower() == 'buy' else Decimal('0.95')
-            avg_execution_price = int(expected_price * slippage_multiplier * self.price_multiplier)
+                # Get current market price for market order
+                best_bid, best_ask = await self.fetch_bbo_prices()
+                expected_price = best_ask if side.lower() == 'buy' else best_bid
 
-            logger.info(f"→ Hedging on Lighter: MARKET {side.upper()} {quantity} {self.ticker_symbol} @ ~${expected_price:,.2f}")
+                # Calculate avg_execution_price with slippage protection
+                # For buy: use higher price (1.05x), for sell: use lower price (0.95x)
+                slippage_multiplier = Decimal('1.05') if side.lower() == 'buy' else Decimal('0.95')
+                avg_execution_price = int(expected_price * slippage_multiplier * self.price_multiplier)
 
-            # Submit market order using create_market_order (same as place_market_close_order)
-            create_order, _, error = await self.lighter_client.create_market_order(
-                market_index=self.market_id,
-                client_order_index=client_order_index,
-                base_amount=int(quantity * self.base_amount_multiplier),
-                avg_execution_price=avg_execution_price,
-                is_ask=is_ask,
-                reduce_only=False
-            )
+                logger.info(f"→ Hedging on Lighter: MARKET {side.upper()} {quantity} {self.ticker_symbol} @ ~${expected_price:,.2f}")
+                logger.info(f"[DEBUG] best_bid={best_bid}, best_ask={best_ask}, avg_execution_price={avg_execution_price}, price_multiplier={self.price_multiplier}")
 
-            if error is not None:
-                logger.error(f"✗ Hedge FAILED: {error}")
-                return False
+                # Submit market order using create_market_order (same as place_market_close_order)
+                create_order, _, error = await self.lighter_client.create_market_order(
+                    market_index=self.market_id,
+                    client_order_index=client_order_index,
+                    base_amount=int(quantity * self.base_amount_multiplier),
+                    avg_execution_price=avg_execution_price,
+                    is_ask=is_ask,
+                    reduce_only=False
+                )
 
-            logger.info(f"✓ Hedge order submitted (waiting for fill confirmation...)")
+                if error is not None:
+                    logger.error(f"✗ Hedge FAILED: {error}")
+                    logger.info(f"[HEDGE-LOCK] Lock released (error)")
+                    return False
 
-            # Wait for order to fill and verify position change
-            expected_change = quantity if side.lower() == 'buy' else -quantity
-            max_attempts = 5
+                logger.info(f"✓ Hedge order submitted (waiting for fill confirmation...)")
 
-            for attempt in range(max_attempts):
-                await asyncio.sleep(0.3)  # Wait 300ms between checks
+                # Wait for order to fill and verify position change
+                expected_change = quantity if side.lower() == 'buy' else -quantity
+                max_attempts = 5
 
+                for attempt in range(max_attempts):
+                    await asyncio.sleep(0.3)  # Wait 300ms between checks
+
+                    position_after = await self.get_position()
+                    position_change = position_after - position_before
+
+                    # Check if position changed as expected (with small tolerance for rounding)
+                    if abs(position_change - expected_change) < Decimal('0.0001'):
+                        # Position changed correctly, update local tracking
+                        self.current_position = position_after
+                        logger.info(f"✓ Hedge FILLED: position {position_before} → {position_after} (attempt {attempt + 1})")
+                        logger.info(f"[HEDGE-LOCK] Lock released (success)")
+                        return True
+
+                # Position verification failed
                 position_after = await self.get_position()
                 position_change = position_after - position_before
+                logger.error(f"✗ Hedge verification FAILED after {max_attempts} attempts")
+                logger.error(f"  Expected change: {expected_change}, Actual change: {position_change}")
+                logger.error(f"  Position: {position_before} → {position_after}")
 
-                # Check if position changed as expected (with small tolerance for rounding)
-                if abs(position_change - expected_change) < Decimal('0.0001'):
-                    # Position changed correctly, update local tracking
-                    self.current_position = position_after
-                    logger.info(f"✓ Hedge FILLED: position {position_before} → {position_after} (attempt {attempt + 1})")
-                    return True
+                # Update to actual position even if verification failed
+                self.current_position = position_after
 
-            # Position verification failed
-            position_after = await self.get_position()
-            position_change = position_after - position_before
-            logger.error(f"✗ Hedge verification FAILED after {max_attempts} attempts")
-            logger.error(f"  Expected change: {expected_change}, Actual change: {position_change}")
-            logger.error(f"  Position: {position_before} → {position_after}")
+                logger.info(f"[HEDGE-LOCK] Lock released (verification failed)")
+                return False
 
-            # Update to actual position even if verification failed
-            self.current_position = position_after
-
-            return False
-
-        except Exception as e:
-            logger.error(f"Failed to place Lighter hedge order: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"Failed to place Lighter hedge order: {e}")
+                logger.info(f"[HEDGE-LOCK] Lock released (exception)")
+                return False
 
     async def place_market_close_order(self, side: str, quantity: Decimal) -> bool:
         """
