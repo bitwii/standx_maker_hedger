@@ -38,7 +38,9 @@ class StandXMakerHedger:
         self.risk_mgr = RiskManager(self.config)
 
         # Strategy settings
+        # 订单成交后是否立即对冲
         self.hedge_immediately = self.config.get("strategy.hedge_immediately", True)
+        # 撤单距离百分比
         self.spread_pct = self.config.get("trading.spread_percentage", 0.1) / 100.0
         self.cancel_threshold = self.config.get("strategy.cancel_distance_percentage", 0.05) / 100.0
         self.check_interval = self.config.get("trading.check_interval_seconds", 5)
@@ -705,7 +707,7 @@ def setup_logging(config):
     root_logger.addHandler(console_handler)
 
 
-async def main_async():
+    async def main_async():
     """Async main entry point"""
     # Load config
     config = get_config()

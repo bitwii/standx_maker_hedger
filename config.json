@@ -50,7 +50,7 @@
     "max_position_size": 1000.0,
     "_max_position_size_comment": "最大持仓金额（USD）",
 
-    "max_daily_loss": 50.0,
+    "max_daily_loss": 500.0,
     "_max_daily_loss_comment": "每日最大亏损限额（USD）",
 
     "min_profit_threshold": 5.0,
@@ -85,7 +85,7 @@
   "logging": {
     "_comment": "日志配置",
 
-    "level": "DEBUG",
+    "level": "INFO",
     "_level_comment": "日志级别: DEBUG, INFO, WARNING, ERROR",
 
     "file": "logs/standx_maker_hedger.log",

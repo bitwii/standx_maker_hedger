@@ -277,24 +277,26 @@ class LighterHedger:
             slippage_multiplier = Decimal('1.05') if side.lower() == 'buy' else Decimal('0.95')
             avg_execution_price = int(expected_price * slippage_multiplier * self.price_multiplier)
 
+            # IMPORTANT: Using reduce_only=False because reduce_only=True seems to cause orders to be
+            # silently rejected by Lighter (returns success but doesn't execute)
             create_order, _, error = await self.lighter_client.create_market_order(
                 market_index=self.market_id,
                 client_order_index=client_order_index,
                 base_amount=int(quantity * self.base_amount_multiplier),
                 avg_execution_price=avg_execution_price,
                 is_ask=is_ask,
-                reduce_only=True  # Ensure we only reduce position, never reverse it
+                reduce_only=False  # Changed from True - see comment above
             )
 
             if error is not None:
                 logger.error(f"✗ Market close FAILED: {error}")
-                logger.error(f"Order parameters: side={side}, quantity={quantity}, is_ask={is_ask}, reduce_only=True")
+                logger.error(f"Order parameters: side={side}, quantity={quantity}, is_ask={is_ask}, reduce_only=False")
                 return False
 
             logger.info(f"✓ Market close order placed successfully")
             if create_order:
-                logger.debug(f"Order details: client_order_index={client_order_index}, base_amount={int(quantity * self.base_amount_multiplier)}, reduce_only=True")
-                logger.debug(f"Order response: {create_order}")
+                logger.info(f"Order response: order_id={getattr(create_order, 'id', 'N/A')}, status={getattr(create_order, 'status', 'N/A')}")
+                logger.debug(f"Full order details: {create_order}")
 
             # Note: Position will be updated on next get_position() call from API
             # Don't update local tracking here as order may not be filled immediately

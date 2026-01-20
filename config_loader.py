@@ -80,17 +80,11 @@ class Config:
         return self.get_env("LIGHTER_PRIVATE_KEY", "")
 
     def get_max_position_size(self) -> float:
-        """Get max position size from env or config"""
-        env_value = os.getenv("MAX_POSITION_SIZE")
-        if env_value:
-            return float(env_value)
+        """Get max position size from config"""
         return self.get("risk_management.max_position_size", 1000.0)
 
     def get_max_daily_loss(self) -> float:
-        """Get max daily loss from env or config"""
-        env_value = os.getenv("MAX_DAILY_LOSS")
-        if env_value:
-            return float(env_value)
+        """Get max daily loss from config"""
         return self.get("risk_management.max_daily_loss", 500.0)
 
     def reload(self):
