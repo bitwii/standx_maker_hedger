@@ -190,11 +190,18 @@ class StandXMakerHedger:
 
             self.current_price = mark_price
 
-            # Calculate order prices， 是spread_percentage这个配置变量
-            spread_amount = mark_price * Decimal(str(self.spread_pct))
+            # Calculate order prices
+            # spread_pct is the TOTAL spread (e.g., 0.09 = 9 bps total)
+            # Each side gets half of the spread
+            half_spread = mark_price * Decimal(str(self.spread_pct)) / Decimal('2')
+
             # Round prices to integers for StandX price tick requirement
-            bid_price = float(int(mark_price - spread_amount))
-            ask_price = float(int(mark_price + spread_amount))
+            bid_price = float(int(mark_price - half_spread))
+            ask_price = float(int(mark_price + half_spread))
+
+            # Log spread for verification (in bps)
+            actual_spread_bps = (Decimal(str(ask_price)) - Decimal(str(bid_price))) / mark_price * Decimal('10000')
+            logger.debug(f"Spread: {actual_spread_bps:.1f} bps (bid=${bid_price:,.2f}, ask=${ask_price:,.2f}, mark=${mark_price:,.2f})")
 
             # Check if we can place orders
             if not self.risk_mgr.can_place_order(len(self.standx.active_orders)):
