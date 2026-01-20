@@ -62,6 +62,7 @@
     "max_open_orders": 10,
     "_max_open_orders_comment": "最大同时挂单数量"
   },
+  
 
   "strategy": {
     "_comment": "策略参数配置",
@@ -78,7 +79,7 @@
     "close_order_update_threshold": 0.05,
     "_close_order_update_comment": "平仓单更新阈值，0.05 = 5 bps（市价同向移动超过5 bps时撤单重新下单）",
 
-    "close_position_on_shutdown": false,
+    "close_position_on_shutdown": true,
     "_close_position_comment": "关闭程序时是否自动平仓"
   },
 

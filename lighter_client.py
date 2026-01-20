@@ -179,48 +179,46 @@ class LighterHedger:
     async def place_hedge_order(self, side: str, quantity: Decimal,
                                price: Optional[Decimal] = None) -> bool:
         """
-        Place a hedge order on Lighter.
+        Place a hedge order on Lighter using market order for immediate execution.
+        Position is updated only after confirming the order was filled.
 
         Args:
             side: "buy" or "sell"
             quantity: Order quantity
-            price: Limit price (if None, uses market order logic with best price)
+            price: Reference price (not used for market orders, kept for compatibility)
 
         Returns:
-            True if successful
+            True if successful and position verified
         """
         if not self.enabled:
             logger.warning("Lighter hedging disabled, skipping hedge order")
             return False
 
         try:
+            # Record position before placing order
+            position_before = await self.get_position()
+            logger.info(f"Position before hedge: {position_before} {self.ticker_symbol}")
+
             # Determine order side
             is_ask = True if side.lower() == 'sell' else False
 
             # Generate unique client order index
             client_order_index = int(time.time() * 1000) % 1000000
 
-            # If no price specified, get best price from orderbook
-            if price is None:
-                best_bid, best_ask = await self.fetch_bbo_prices()
-                price = best_ask if side.lower() == 'buy' else best_bid
-                logger.info(f"Using market price for {side}: {price}")
-
-            # Create order parameters
+            # Use market order for immediate execution
             order_params = {
                 'market_index': self.market_id,
                 'client_order_index': client_order_index,
                 'base_amount': int(quantity * self.base_amount_multiplier),
-                'price': int(price * self.price_multiplier),
+                'price': 0,  # Market order uses price 0
                 'is_ask': is_ask,
-                'order_type': self.lighter_client.ORDER_TYPE_LIMIT,
-                'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME,
+                'order_type': self.lighter_client.ORDER_TYPE_MARKET,  # Changed to MARKET
+                'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
                 'reduce_only': False,
                 'trigger_price': 0,
             }
 
-            hedge_value = float(quantity) * float(price)
-            logger.info(f"→ Hedging on Lighter: {side.upper()} {quantity} {self.ticker_symbol} @ ${price:,.2f} (${hedge_value:,.2f})")
+            logger.info(f"→ Hedging on Lighter: MARKET {side.upper()} {quantity} {self.ticker_symbol}")
 
             # Submit order
             create_order, _, error = await self.lighter_client.create_order(**order_params)
@@ -229,13 +227,36 @@ class LighterHedger:
                 logger.error(f"✗ Hedge FAILED: {error}")
                 return False
 
-            logger.info(f"✓ Hedge placed successfully")
+            logger.info(f"✓ Hedge order submitted (waiting for fill confirmation...)")
 
-            # Update position tracking
-            qty_signed = quantity if side.lower() == 'buy' else -quantity
-            self.current_position += qty_signed
+            # Wait for order to fill and verify position change
+            expected_change = quantity if side.lower() == 'buy' else -quantity
+            max_attempts = 5
 
-            return True
+            for attempt in range(max_attempts):
+                await asyncio.sleep(0.3)  # Wait 300ms between checks
+
+                position_after = await self.get_position()
+                position_change = position_after - position_before
+
+                # Check if position changed as expected (with small tolerance for rounding)
+                if abs(position_change - expected_change) < Decimal('0.0001'):
+                    # Position changed correctly, update local tracking
+                    self.current_position = position_after
+                    logger.info(f"✓ Hedge FILLED: position {position_before} → {position_after} (attempt {attempt + 1})")
+                    return True
+
+            # Position verification failed
+            position_after = await self.get_position()
+            position_change = position_after - position_before
+            logger.error(f"✗ Hedge verification FAILED after {max_attempts} attempts")
+            logger.error(f"  Expected change: {expected_change}, Actual change: {position_change}")
+            logger.error(f"  Position: {position_before} → {position_after}")
+
+            # Update to actual position even if verification failed
+            self.current_position = position_after
+
+            return False
 
         except Exception as e:
             logger.error(f"Failed to place Lighter hedge order: {e}")
@@ -244,20 +265,24 @@ class LighterHedger:
     async def place_market_close_order(self, side: str, quantity: Decimal) -> bool:
         """
         Place a market order to close Lighter position.
-        Since Lighter has no fees, we use market orders for instant execution.
+        Position is verified after order submission to ensure it was filled.
 
         Args:
             side: "buy" or "sell"
-            quantity: Order quantity
+            quantity: Order quantity to close
 
         Returns:
-            True if successful
+            True if successful and position verified
         """
         if not self.enabled:
             logger.warning("Lighter hedging disabled, skipping market close order")
             return False
 
         try:
+            # Record position before closing
+            position_before = await self.get_position()
+            logger.info(f"Position before close: {position_before} {self.ticker_symbol}")
+
             # Determine order side
             is_ask = True if side.lower() == 'sell' else False
 
@@ -277,31 +302,56 @@ class LighterHedger:
             slippage_multiplier = Decimal('1.05') if side.lower() == 'buy' else Decimal('0.95')
             avg_execution_price = int(expected_price * slippage_multiplier * self.price_multiplier)
 
-            # IMPORTANT: Using reduce_only=False because reduce_only=True seems to cause orders to be
-            # silently rejected by Lighter (returns success but doesn't execute)
             create_order, _, error = await self.lighter_client.create_market_order(
                 market_index=self.market_id,
                 client_order_index=client_order_index,
                 base_amount=int(quantity * self.base_amount_multiplier),
                 avg_execution_price=avg_execution_price,
                 is_ask=is_ask,
-                reduce_only=False  # Changed from True - see comment above
+                reduce_only=True  # Ensure we only reduce position, never reverse it
             )
 
             if error is not None:
                 logger.error(f"✗ Market close FAILED: {error}")
-                logger.error(f"Order parameters: side={side}, quantity={quantity}, is_ask={is_ask}, reduce_only=False")
+                logger.error(f"Order parameters: side={side}, quantity={quantity}, is_ask={is_ask}, reduce_only=True")
                 return False
 
-            logger.info(f"✓ Market close order placed successfully")
-            if create_order:
-                logger.info(f"Order response: order_id={getattr(create_order, 'id', 'N/A')}, status={getattr(create_order, 'status', 'N/A')}")
-                logger.debug(f"Full order details: {create_order}")
+            logger.info(f"✓ Market close order submitted (waiting for fill confirmation...)")
 
-            # Note: Position will be updated on next get_position() call from API
-            # Don't update local tracking here as order may not be filled immediately
+            # Wait for order to fill and verify position change
+            expected_change = -quantity if side.lower() == 'sell' else quantity
+            max_attempts = 5
 
-            return True
+            for attempt in range(max_attempts):
+                await asyncio.sleep(0.3)  # Wait 300ms between checks
+
+                position_after = await self.get_position()
+                position_change = position_after - position_before
+
+                # Check if position changed as expected (with tolerance)
+                if abs(position_change - expected_change) < Decimal('0.0001'):
+                    # Position changed correctly, update local tracking
+                    self.current_position = position_after
+                    logger.info(f"✓ Close order FILLED: position {position_before} → {position_after} (attempt {attempt + 1})")
+                    return True
+
+                # Special case: if position is now zero, consider it successful
+                if abs(position_after) < Decimal('0.0001'):
+                    self.current_position = Decimal('0')
+                    logger.info(f"✓ Close order FILLED: position {position_before} → 0 (attempt {attempt + 1})")
+                    return True
+
+            # Position verification failed
+            position_after = await self.get_position()
+            position_change = position_after - position_before
+            logger.error(f"✗ Close verification FAILED after {max_attempts} attempts")
+            logger.error(f"  Expected change: {expected_change}, Actual change: {position_change}")
+            logger.error(f"  Position: {position_before} → {position_after}")
+
+            # Update to actual position even if verification failed
+            self.current_position = position_after
+
+            return False
 
         except Exception as e:
             logger.error(f"Failed to place Lighter market close order: {e}")

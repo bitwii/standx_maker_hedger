@@ -103,7 +103,7 @@ class StandXMakerHedger:
 
             logger.info(f"Hedging on Lighter: {hedge_side} {filled_qty}")
 
-            # Place hedge on Lighter
+            # Place hedge on Lighter，判断，如果有配置立即对冲，就执行对冲
             if self.hedge_immediately:
                 success = await self.lighter.place_hedge_order(
                     side=hedge_side,
@@ -189,7 +189,7 @@ class StandXMakerHedger:
 
             self.current_price = mark_price
 
-            # Calculate order prices
+            # Calculate order prices， 是spread_percentage这个配置变量
             spread_amount = mark_price * Decimal(str(self.spread_pct))
             # Round prices to integers for StandX price tick requirement
             bid_price = float(int(mark_price - spread_amount))
@@ -218,7 +218,7 @@ class StandXMakerHedger:
     async def check_and_update_orders(self):
         """Check if orders need to be cancelled and replaced"""
         try:
-            # Get current price
+            # Get current price,调用StandX的ticker接口获取最新当前
             ticker = self.standx.get_ticker()
             mark_price = Decimal(str(ticker.get("mark_price", 0)))
 
@@ -524,7 +524,7 @@ class StandXMakerHedger:
                     logger.error("EMERGENCY STOP TRIGGERED - Shutting down")
                     break
 
-                # Check and update orders
+                # Check and update orders， 这里会调用place_market_making_orders（）
                 await self.check_and_update_orders()
 
                 # Check and manage close orders (if we have open positions)
