@@ -6,8 +6,8 @@
     "symbol": "BTC-USD",
     "_symbol_comment": "交易对，格式: BTC-USD, ETH-USD 等",
 
-    "spread_percentage": 0.09,
-    "_spread_comment": "挂单总价差百分比（买卖价差），0.09 = 0.09% = 9 bps（符合StandX ≤10 bps要求，获得100%积分）",
+    "spread_percentage": 0.20,
+    "_spread_comment": "挂单总价差百分比（买卖价差），0.20 = 0.20% = 20 bps（单边10 bps，符合StandX ≤10 bps要求）",
 
     "order_size": "0.01",
     "_order_size_comment": "单笔订单大小（BTC数量）",
