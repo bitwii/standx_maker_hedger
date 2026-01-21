@@ -40,12 +40,18 @@ class StandXWebSocketManager:
         self._running = False
         self._task = None
         self._loop = None
+        self._authenticated = False  # Track if WebSocket is authenticated and ready
 
     async def start(self):
         """Start WebSocket task"""
         self._running = True
         self._loop = asyncio.get_running_loop()
         self._task = self._loop.create_task(self._run_loop())
+
+    @property
+    def is_ready(self) -> bool:
+        """Check if WebSocket is connected and authenticated"""
+        return self._authenticated and self._ws is not None
 
     async def stop(self):
         """Stop WebSocket"""
@@ -62,6 +68,7 @@ class StandXWebSocketManager:
         """Main loop with auto-reconnect"""
         while self._running:
             try:
+                self._authenticated = False  # Reset on each connection attempt
                 self.logger.info(f"[WS] Connecting to {self.url}...")
                 async with websockets.connect(self.url, ping_interval=None) as ws:
                     self._ws = ws
@@ -76,13 +83,16 @@ class StandXWebSocketManager:
                             msg = await ws.recv()
                             self._handle_message(msg)
                         except websockets.ConnectionClosed:
+                            self._authenticated = False
                             self.logger.warning("[WS] Connection closed by server")
                             break
                         except Exception as e:
+                            self._authenticated = False
                             self.logger.error(f"[WS] Receive error: {e}")
                             break
 
             except Exception as e:
+                self._authenticated = False
                 self.logger.error(f"[WS] Connection error: {e}")
 
             if self._running:
@@ -114,8 +124,10 @@ class StandXWebSocketManager:
             if msg.get("channel") == "auth":
                 auth_data = msg.get("data", {})
                 if auth_data.get("code") == 0 or auth_data.get("message") == "success":
+                    self._authenticated = True
                     self.logger.info("[WS] Authentication successful")
                 else:
+                    self._authenticated = False
                     self.logger.error(f"[WS] Auth failed: {auth_data}")
                 return
 

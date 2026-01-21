@@ -569,6 +569,18 @@ class StandXMakerHedger:
         self.running = True
 
         try:
+            # Wait for WebSocket to be ready before placing orders
+            # This prevents duplicate orders due to race condition
+            max_wait = 10  # Maximum wait time in seconds
+            for i in range(max_wait):
+                if self.standx.ws_manager and self.standx.ws_manager.is_ready:
+                    logger.info("WebSocket ready, placing initial orders...")
+                    break
+                logger.debug(f"Waiting for WebSocket connection... ({i+1}/{max_wait})")
+                await asyncio.sleep(1)
+            else:
+                logger.warning("WebSocket not ready after timeout, placing orders anyway")
+
             # Place initial orders
             await self.place_market_making_orders()
 
