@@ -219,6 +219,10 @@ class StandXMarketMaker:
         # These should NOT trigger hedges when filled
         self.close_order_ids: set = set()
 
+        # Order status callbacks
+        self._order_confirm_handler = None  # Called when order is confirmed (open)
+        self._order_cancel_handler = None   # Called when order is cancelled
+
         # Current market price
         self.current_price = None
 
@@ -366,8 +370,17 @@ class StandXMarketMaker:
             side = order_data.get("side", "")
             price = float(order_data.get("price", 0))
             qty = float(order_data.get("qty", 0) or order_data.get("size", 0))
+            cl_ord_id = order_data.get("cl_ord_id", "")
             # Fix: StandX uses "fill_qty" not "filled_qty"
             filled_qty = float(order_data.get("fill_qty", 0) or order_data.get("filled_qty", 0) or order_data.get("filled_size", 0))
+
+            # Handle order confirmed (open status) - notify state machine
+            if status == "open" and self._order_confirm_handler:
+                self._order_confirm_handler(order_id, cl_ord_id)
+
+            # Handle order cancelled - notify state machine
+            if status in ["cancelled", "canceled"] and self._order_cancel_handler:
+                self._order_cancel_handler(order_id)
 
             # Update order info
             if order_id in self.active_orders:
@@ -430,6 +443,14 @@ class StandXMarketMaker:
     def setup_order_update_handler(self, handler: Callable):
         """Setup callback for order fills"""
         self._order_update_handler = handler
+
+    def setup_order_confirm_handler(self, handler: Callable):
+        """Setup callback for order confirmations (open status)"""
+        self._order_confirm_handler = handler
+
+    def setup_order_cancel_handler(self, handler: Callable):
+        """Setup callback for order cancellations"""
+        self._order_cancel_handler = handler
 
     def mark_as_close_order(self, order_id: str):
         """
@@ -515,12 +536,13 @@ class StandXMarketMaker:
             logger.error(f"Failed to place {side} order: {e}")
             return None
 
-    async def cancel_orders(self, order_ids: List[str] = None) -> bool:
+    async def cancel_orders(self, order_ids: List[str] = None, exclude_close_order: bool = False) -> bool:
         """
         Cancel orders by ID list
 
         Args:
             order_ids: List of order IDs (if None, cancels all)
+            exclude_close_order: If True, exclude close orders from cancellation
 
         Returns:
             True if successful
@@ -528,6 +550,10 @@ class StandXMarketMaker:
         try:
             if order_ids is None:
                 order_ids = list(self.active_orders.keys())
+
+            # Exclude close orders if requested
+            if exclude_close_order and self.close_order_ids:
+                order_ids = [oid for oid in order_ids if oid not in self.close_order_ids]
 
             if not order_ids:
                 return True

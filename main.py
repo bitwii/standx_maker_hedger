@@ -12,6 +12,7 @@ from config_loader import get_config
 from standx_client import StandXMarketMaker
 from lighter_client import LighterHedger
 from risk_manager import RiskManager
+from state_machine import StateMachine, BotState, OrderState
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class StandXMakerHedger:
         self.standx = StandXMarketMaker(self.config)
         self.lighter = LighterHedger(self.config)
         self.risk_mgr = RiskManager(self.config)
+        self.state_machine = StateMachine()
 
         # Strategy settings
         # 订单成交后是否立即对冲
@@ -77,6 +79,21 @@ class StandXMakerHedger:
 
         logger.info("StandX Maker Hedger initialized successfully")
 
+    def handle_order_confirmed(self, order_id: str, cl_ord_id: str):
+        """Handle order confirmed (open status) from WebSocket"""
+        # Find cl_ord_id from tracked orders if not provided
+        if not cl_ord_id:
+            for cid, order in self.state_machine._orders.items():
+                if order.order_id == order_id:
+                    cl_ord_id = cid
+                    break
+        if cl_ord_id:
+            self.state_machine.on_order_confirmed(cl_ord_id, order_id)
+
+    def handle_order_cancelled(self, order_id: str):
+        """Handle order cancelled from WebSocket"""
+        self.state_machine.on_order_cancelled(order_id)
+
     async def handle_standx_order_fill(self, order_data: dict):
         """
         Handle StandX order fill by hedging on Lighter.
@@ -92,6 +109,9 @@ class StandXMakerHedger:
 
             logger.info(f"Detected StandX fill: {side} {filled_qty}@{fill_price}")
 
+            # Update state machine with fill info
+            tracked_order = self.state_machine.on_order_filled(str(order_id), filled_qty)
+
             # Check risk limits before hedging
             if not self.risk_mgr.can_open_position(float(filled_qty)):
                 logger.error("Risk limits prevent hedging, MANUAL INTERVENTION REQUIRED!")
@@ -102,6 +122,9 @@ class StandXMakerHedger:
             hedge_side = "sell" if side == "buy" else "buy"
 
             logger.info(f"Hedging on Lighter: {hedge_side} {filled_qty}")
+
+            # Transition to HEDGING state
+            self.state_machine.on_hedging_start()
 
             # Place hedge on Lighter，判断，如果有配置立即对冲，就执行对冲
             if self.hedge_immediately:
@@ -117,6 +140,9 @@ class StandXMakerHedger:
                     # Calculate P&L (simplified - actual P&L depends on fill prices)
                     # For now, just track that we're hedged
                     self.risk_mgr.update_pnl(0.0)
+
+                    # Transition to CLOSING state
+                    self.state_machine.on_hedging_complete()
 
                     # Place close order on StandX (Maker order to close the position)
                     # Close side is same as hedge side (opposite of original fill)
@@ -166,6 +192,15 @@ class StandXMakerHedger:
                 # Mark this order as a close order (should NOT trigger hedge when filled)
                 self.standx.mark_as_close_order(order.order_id)
 
+                # Track in state machine
+                self.state_machine.track_order(
+                    cl_ord_id=order.cl_ord_id,
+                    side=side,
+                    price=Decimal(str(close_price)),
+                    quantity=quantity,
+                    is_close_order=True
+                )
+
                 # Save cl_ord_id for tracking (real order_id will come from WebSocket)
                 self.close_order_cl_ord_id = order.cl_ord_id
                 self.close_order_price = Decimal(str(close_price))
@@ -180,6 +215,11 @@ class StandXMakerHedger:
     async def place_market_making_orders(self):
         """Place bid and ask orders around current price"""
         try:
+            # Check state machine - prevent duplicate orders
+            if not self.state_machine.can_place_orders():
+                logger.debug(f"Cannot place orders in state {self.state_machine.state_name}")
+                return
+
             # Get current price
             ticker = self.standx.get_ticker()
             mark_price = Decimal(str(ticker.get("mark_price", 0)))
@@ -210,15 +250,36 @@ class StandXMakerHedger:
 
             # Place bid order
             bid_order = await self.standx.place_order("buy", bid_price, float(self.order_size))
+            bid_cl_ord_id = None
             if bid_order:
+                bid_cl_ord_id = bid_order.cl_ord_id
+                self.state_machine.track_order(
+                    cl_ord_id=bid_cl_ord_id,
+                    side="buy",
+                    price=Decimal(str(bid_price)),
+                    quantity=self.order_size
+                )
                 symbol = self.standx.symbol.split('-')[0]  # e.g., "BTC"
                 logger.info(f"✓ Bid placed: {symbol} @ ${bid_price:,.2f}")
 
             # Place ask order
             ask_order = await self.standx.place_order("sell", ask_price, float(self.order_size))
+            ask_cl_ord_id = None
             if ask_order:
+                ask_cl_ord_id = ask_order.cl_ord_id
+                self.state_machine.track_order(
+                    cl_ord_id=ask_cl_ord_id,
+                    side="sell",
+                    price=Decimal(str(ask_price)),
+                    quantity=self.order_size
+                )
                 symbol = self.standx.symbol.split('-')[0]  # e.g., "BTC"
                 logger.info(f"✓ Ask placed: {symbol} @ ${ask_price:,.2f}")
+
+            # Transition to PLACING state
+            pending_orders = [o for o in [bid_cl_ord_id, ask_cl_ord_id] if o]
+            if pending_orders:
+                self.state_machine.on_placing_orders(pending_orders)
 
         except Exception as e:
             logger.error(f"Error placing orders: {e}", exc_info=True)
@@ -226,7 +287,12 @@ class StandXMakerHedger:
     async def check_and_update_orders(self):
         """Check if orders need to be cancelled and replaced"""
         try:
-            # Get current price,调用StandX的ticker接口获取最新当前
+            # Check state machine - only check in MARKET_MAKING state
+            if not self.state_machine.can_check_orders():
+                logger.debug(f"Skip order check in state {self.state_machine.state_name}")
+                return
+
+            # Get current price
             ticker = self.standx.get_ticker()
             mark_price = Decimal(str(ticker.get("mark_price", 0)))
 
@@ -238,9 +304,17 @@ class StandXMakerHedger:
             # Sync open orders
             await self.standx.sync_open_orders()
 
-            # Check if any order is too close to current price
+            # Check if any market making order is too close to current price
+            # Exclude close orders from this check
             needs_update = False
-            for _, order_info in self.standx.active_orders.items():
+            close_order = self.state_machine.get_close_order()
+            close_order_id = close_order.order_id if close_order else None
+
+            for order_id, order_info in self.standx.active_orders.items():
+                # Skip close order
+                if str(order_id) == str(close_order_id):
+                    continue
+
                 price_diff_pct = abs(Decimal(str(order_info.price)) - mark_price) / mark_price
 
                 if price_diff_pct < Decimal(str(self.cancel_threshold)):
@@ -249,11 +323,20 @@ class StandXMakerHedger:
                     needs_update = True
                     break
 
-            # If orders need updating, cancel all and replace
-            if needs_update or len(self.standx.active_orders) == 0:
-                # Cancel all orders
-                if len(self.standx.active_orders) > 0:
-                    await self.standx.cancel_orders()
+            # If orders need updating, cancel market making orders only (not close orders)
+            # Count market making orders (exclude close order)
+            mm_order_count = len(self.standx.active_orders)
+            if close_order_id:
+                mm_order_count -= 1 if close_order_id in self.standx.active_orders else 0
+
+            if needs_update or mm_order_count == 0:
+                # Get orders to cancel (excludes close orders)
+                orders_to_cancel = self.state_machine.get_orders_to_cancel()
+
+                if orders_to_cancel:
+                    # Cancel only market making orders
+                    self.state_machine.on_cancelling_orders(orders_to_cancel)
+                    await self.standx.cancel_orders(exclude_close_order=True)
                     await asyncio.sleep(1)  # Brief pause
 
                 # Place new orders
@@ -546,6 +629,10 @@ class StandXMakerHedger:
         # Setup order fill handler
         self.standx.setup_order_update_handler(self.handle_standx_order_fill)
 
+        # Setup state machine callbacks
+        self.standx.setup_order_confirm_handler(self.handle_order_confirmed)
+        self.standx.setup_order_cancel_handler(self.handle_order_cancelled)
+
         # Connect to Lighter
         if self.lighter.enabled:
             if not await self.lighter.connect():
@@ -569,7 +656,7 @@ class StandXMakerHedger:
         self.running = True
 
         try:
-            # Wait for WebSocket to be ready before placing orders
+            # Wait for WebSocket to be ready before placing orders，用循环10秒来等待WebSocket连接就绪
             # This prevents duplicate orders due to race condition
             max_wait = 10  # Maximum wait time in seconds
             for i in range(max_wait):
